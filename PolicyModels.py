@@ -2,13 +2,17 @@ import numpy as np
 import torch
 from torch import nn
 
-from Model_Trace_Interactor import ModelTraceInteractor
+from env import SimEnv
 from ErrorEncoder import ErrorEncoder
 from MotionModel import BicycleModel, state_space_aug_dim, state_space_dim, u_ref
 from ClassicalController import ClassicalController
 from utils import state_diff
 from PPO import *
 import math
+from LinearTrackingAdaptiveController import LinearTrackingAdaptiveController
+from typing import Union
+from copy import deepcopy
+
 
 
 class ControlSignalEncoder(nn.Module):
@@ -118,12 +122,16 @@ class Fuser(nn.Module):
 
 class ActorCriticPlus(ActorCritic):
     def __init__(self, policy_input_dim, action_dim, has_continuous_action_space, action_std_init,
-                 Classical_Controller: ClassicalController, Bicycle_Model: BicycleModel,
-                 Error_Encoder: ErrorEncoder, Fuser_Model: Fuser):
+                 Classical_Controller: Union[ClassicalController, LinearTrackingAdaptiveController],
+                 Base_Motion_Model: BicycleModel,
+                 Predictor: SimEnv,
+                 Error_Encoder: ErrorEncoder,
+                 Fuser_Model: Fuser):
         super(ActorCriticPlus, self).__init__(policy_input_dim, action_dim, has_continuous_action_space,
                                               action_std_init)
         self.classical_controller = Classical_Controller
-        self.bicycle_model = Bicycle_Model
+        self.base_motion_model = Base_Motion_Model
+        self.predictor = Predictor
         self.error_encoder = Error_Encoder
         self.fuser = Fuser_Model
 
@@ -132,47 +140,69 @@ class ActorCriticPlus(ActorCritic):
         :param data_input: state space, target points and actions in global frame,
                            shape (batch_size, seq_len + 1, state_dim(aug) + 2 * target_points_num + action_dim)
         """
-        _, policy_input = organize_policy_input(self.error_encoder, self.fuser, self.bicycle_model,
-                                                self.classical_controller, data_input)
+        _, policy_input = organize_policy_input(self.error_encoder,
+                                                self.fuser,
+                                                self.base_motion_model,
+                                                deepcopy(self.predictor),  # deepcopy to avoid changing predictor's state (predictor is raw sim_env)
+                                                data_input)
 
         return super(ActorCriticPlus, self).act(policy_input)
 
     def evaluate(self, data_input, action):
-        error_encoder_output, policy_input = organize_policy_input(
-            self.error_encoder, self.fuser, self.bicycle_model, self.classical_controller, data_input)
+        error_encoder_output, policy_input = organize_policy_input(self.error_encoder,
+                                                                   self.fuser,
+                                                                   self.base_motion_model,
+                                                                   deepcopy(self.predictor),  # deepcopy to avoid changing predictor's state (predictor is raw sim_env)
+                                                                   data_input)
 
         return *super(ActorCriticPlus, self).evaluate(policy_input, action), error_encoder_output
 
 
 class PPOPlus(PPO):
     def __init__(self, policy_input_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip,
-                 has_continuous_action_space, Classical_Controller: ClassicalController, Bicycle_Model: BicycleModel,
-                 Error_Encoder: ErrorEncoder, Fuser_Model: Fuser, action_std_init=0.6, num_vehicles=1):
+                 has_continuous_action_space,
+                 Classical_Controller: Union[ClassicalController, LinearTrackingAdaptiveController],
+                 Base_Motion_Model: BicycleModel,
+                 Predictor: SimEnv,
+                 Error_Encoder: ErrorEncoder,
+                 Fuser_Model: Fuser,
+                 action_std_init=0.6, num_vehicles=1):
         super(PPOPlus, self).__init__(policy_input_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip,
                                       has_continuous_action_space, action_std_init, num_vehicles)
 
         self.policy = ActorCriticPlus(policy_input_dim, action_dim, has_continuous_action_space, action_std_init,
-                                      Classical_Controller, Bicycle_Model, Error_Encoder, Fuser_Model).to(device)
+                                      Classical_Controller,
+                                      Base_Motion_Model,
+                                      Predictor,
+                                      Error_Encoder,
+                                      Fuser_Model).to(device)
 
         self.policy_old = ActorCriticPlus(policy_input_dim, action_dim, has_continuous_action_space, action_std_init,
-                                          Classical_Controller, Bicycle_Model, Error_Encoder, Fuser_Model).to(device)
+                                          Classical_Controller,
+                                          Base_Motion_Model,
+                                          Predictor,
+                                          Error_Encoder,
+                                          Fuser_Model).to(device)
         self.policy_old.load_state_dict(self.policy.state_dict())
 
 
-def organize_policy_input(error_encoder_model: ErrorEncoder, fuser_model: Fuser,
-                          base_motion_model: BicycleModel, classical_controller: ClassicalController,
-                          data_arr: np.ndarray, action_dim=2):
+def organize_policy_input(error_encoder_model: ErrorEncoder,
+                          fuser_model: Fuser,
+                          base_motion_model: BicycleModel,
+                          predictor: SimEnv,
+                          data_arr: np.ndarray,
+                          action_dim=2):
     """
     step function for inference
 
     :param error_encoder_model: error encoder model
     :param fuser_model: fuser model
     :param base_motion_model: base motion model
-    :param classical_controller: classical controller
-    :param data_arr: state space, target points and actions in global frame,
+    :param predictor: ModelTraceInteractor
+    :param data_arr: real state space, target points (result of env.format_state) and actions in global frame,
                      shape (batch_size, seq_len + 1, \
                             state_dim(aug) + 2 * trace_points_num(transferred to vehicle frame) + action_dim)
-                     note: action in last sequence is just the absolute control signal(classical controller steering angle and zero Fxf)
+                     note: action in  last sequence  is just the absolute control signal(classical controller steering angle and zero Fxf)
                            but others are full control signal (classical plus nn control signal)
     :param action_dim: action dimension
     :return:

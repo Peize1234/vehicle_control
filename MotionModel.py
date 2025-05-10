@@ -61,11 +61,14 @@ class BicycleModel:
 
         self.ax = None
 
-    def set_state_space(self, state_space_aug):
+    def set_state_space(self, state_space_aug, done=None):
         assert state_space_aug.shape[-1] == state_space_aug_dim, "state_space shape should be (sequence_num, 8)"
         self.state_space = state_space_aug[:, :state_space_dim].copy()
         self.state_space_aug = state_space_aug  # alpha_f, alpha_r
-        self.done = np.zeros(self.state_space.shape[0], dtype=bool)
+        if done is None:
+            self.done = np.zeros(self.state_space.shape[0], dtype=bool)
+        else:
+            self.done = done
 
     def get_Fy(self, alpha, C, u, Fz):
         Fy = np.where(np.abs(alpha) < np.arctan(3 * u * Fz / C),

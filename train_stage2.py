@@ -19,6 +19,8 @@ from ClassicalController import ClassicalController
 from MotionModel import BicycleModel, state_space_dim, state_space_aug_dim
 from utils import state_diff, MultiListContainer
 from Trace import Trace
+from LinearTrackingAdaptiveController import LinearTrackingAdaptiveController
+from copy import deepcopy
 
 
 u_ref = 0.7
@@ -65,7 +67,8 @@ def train():
     # env = gym.make(env_name)
     trace_path = "trace/sweep.npy"
     num_vehicles = 5  # number of vehicles in the environment
-    env = SimEnv(trace_path, num_vehicles=num_vehicles, stage=2)
+    stage = 2
+    env = SimEnv(trace_path, num_vehicles=num_vehicles, stage=stage)
 
     # state_space space dimension
     # state_dim = env.observation_space.shape[0] + 2 * 5
@@ -170,8 +173,9 @@ def train():
                                  error_encoder_drop_prob)
 
     # classical controller
-    base_control_method = "front_wheel_feedback"
-    classical_controller = ClassicalController(trace_path, env.num_vehicles, state_space_dim)
+    # base_control_method = "front_wheel_feedback"
+    # classical_controller = ClassicalController(trace_path, env.num_vehicles, state_space_dim)
+    classical_controller = LinearTrackingAdaptiveController(trace_path, num_vehicles)
 
     # bicycle model
     base_motion_model = BicycleModel(None)
@@ -192,8 +196,13 @@ def train():
     # policy_input_dim = 27
 
     ppo_agent = PPOPlus(policy_input_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip,
-                        has_continuous_action_space, classical_controller, base_motion_model, error_encoder,
-                        fuser, action_std, env.num_vehicles)
+                        has_continuous_action_space,
+                        classical_controller,
+                        base_motion_model,
+                        env,
+                        error_encoder,
+                        fuser,
+                        action_std, env.num_vehicles)
     # ppo_agent = PPO(policy_input_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip,
     #                 has_continuous_action_space, action_std, num_vehicles)
 
@@ -242,13 +251,12 @@ def train():
         u_rand = np.random.uniform(0.7, 0.8, size=max_ep_len)
         for t in range(1, max_ep_len + 1):
 
-            abs_action = classical_controller.get_action(state[:, :state_space_aug_dim],
-                                                         method=base_control_method, zero_Fxf=True).copy()
-            abs_action /= env.action_space.high  # normalize action to [-1, 1]
-            # state = np.hstack((state[:, 2:state_space_dim], state[:, state_space_aug_dim:], abs_action[:, 0:1]))
+            # abs_action = classical_controller.get_action(state[:, :state_space_aug_dim],
+            #                                              method=base_control_method, zero_Fxf=True).copy()
+            classical_action = classical_controller.get_action(state[:, :state_space_aug_dim], zero_Fxf=True).copy()
 
             state_action_seq.append("state", state, env.done)
-            state_action_seq.append("action", abs_action, env.done)
+            state_action_seq.append("action", classical_action, env.done)
 
             input_state = construct_sequence_input(state_action_seq, error_encoder_seq_len + 1, env.done)
 
@@ -256,7 +264,7 @@ def train():
             # print(state.shape)
             relative_action = ppo_agent.select_action(input_state, env.done)
 
-            total_action = np.clip(abs_action + relative_action, -1, 1)
+            total_action = np.clip(classical_action + relative_action, -1, 1)
             state_action_seq.set_item("action", total_action, index=-1, done=env.done)
 
             (state_add_to_buffer, reward_add_to_buffer, done_add_to_buffer, state, reward, output_done) = env.step(
@@ -346,7 +354,7 @@ def train():
     print("============================================================================================")
 
 
-def construct_sequence_input(state_action_seq_container: MultiListContainer, seq_len: int, done: np.ndarray):
+def construct_sequence_input(state_action_seq_container: MultiListContainer, seq_len: int, done: np.ndarray) -> np.ndarray:
     """
     construct sequence input for ppo agent (if seq_len > len(state_seq) 则使用第一个元素对之前的空缺进行补全)
     :param state_action_seq_container: list of states and actions dict("state": [[(state_dim, ), ...], ...],
@@ -367,6 +375,8 @@ def construct_sequence_input(state_action_seq_container: MultiListContainer, seq
         action_seq_arr = np.concatenate((np.repeat(action_seq_arr[:, 0:1, :], seq_len - action_seq_arr.shape[1], axis=1),
                                          action_seq_arr), axis=1)
     input_state = np.concatenate((state_seq_arr, action_seq_arr), axis=-1)
+    # TODO: using dict data structure is better
+    # input_state = {"state_seq": state_seq_arr, "action_seq": action_seq_arr}
     return input_state
 
 

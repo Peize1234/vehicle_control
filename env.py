@@ -246,6 +246,7 @@ class SimEnv(ModelTraceInteractor, gym.Env):
         trace_points_trans_diff = trace_points_trans[:, 1:, :] - trace_points_trans[:, :-1, :]
         self.done = done_copy
 
+        # TODO: using dict data structure is better
         if self.stage == 1:
             return np.concatenate(
                 (

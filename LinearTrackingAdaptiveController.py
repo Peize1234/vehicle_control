@@ -11,7 +11,8 @@ from MotionModel import state_space_dim, state_space_aug_dim
 
 
 class LinearTrackingAdaptiveController(ModelTraceInteractor):
-    def __init__(self, trace_path: str, num_vehicles: int, Q: np.ndarray, R: np.ndarray, gamma=1):
+    def __init__(self, trace_path: str, num_vehicles: int,
+                 Q: np.ndarray = np.diag([1, 0, 1, 0]), R: np.ndarray = np.diag([1]), gamma=1):
         """
         Initialize the linear tracking controller
         :param trace_path: path of the trace file
@@ -141,7 +142,7 @@ class LinearTrackingAdaptiveController(ModelTraceInteractor):
         for A_d, B_d in zip(self.A, self.B):  # Apollo 使用连续模型进行计算
             K, S, E = lqr(A_d, B_d, Q, R)
             # print(A_d, B_d)
-            print("K = ", K)
+            # print("K = ", K)
             K_list.append(-K.copy())
 
         return np.stack(K_list)
@@ -157,7 +158,7 @@ class LinearTrackingAdaptiveController(ModelTraceInteractor):
         error_state = self.error_state[:, :, None]
         return np.squeeze(self.K @ error_state, axis=2)
 
-    def get_action(self, now_state: np.ndarray, target_v=3) -> np.ndarray:
+    def get_action(self, now_state: np.ndarray, target_v=3, zero_Fxf=False) -> np.ndarray:
         """
         Get the actions in lengthways and lateral
         :param now_state: current state, shape (batch_size, state_dim)
@@ -165,7 +166,7 @@ class LinearTrackingAdaptiveController(ModelTraceInteractor):
         :return: action, shape ( batch_size, total_control_dim( lateral(dim=1) and lengthways(dim=1) ) )
         """
         vx = self.state_space[:, 3]
-        lengthways_control_value = base_lengthways_control(vx, target_v)
+        lengthways_control_value = base_lengthways_control(vx, target_v) if not zero_Fxf else np.zeros(vx.shape)
         lateral_control_value = np.squeeze(self.get_controller_value(now_state), axis=1)
         return np.array([lateral_control_value, lengthways_control_value]).T
 
