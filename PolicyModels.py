@@ -14,10 +14,9 @@ from typing import Union
 from copy import deepcopy
 
 
-
-class ControlSignalEncoder(nn.Module):
+class StateEncoder(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim=128, dropout=0.1):
-        super(ControlSignalEncoder, self).__init__()
+        super(StateEncoder, self).__init__()
 
         self.embedding = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
@@ -50,18 +49,13 @@ class ControlSignalEncoder(nn.Module):
         return q, k, v, x
 
 
-class StateEncoder(ControlSignalEncoder):
-    def __init__(self, input_dim, output_dim, hidden_dim=128, dropout=0.1):
-        super(StateEncoder, self).__init__(input_dim, output_dim, hidden_dim, dropout)
-
-
 class Fuser(nn.Module):
-    def __init__(self, controller_input_dim, state_input_dim, fuser_output_dim, hidden_dim=128, num_head=8,
+    def __init__(self, state_input_dim, fuser_output_dim, hidden_dim=128, num_head=8,
                  dropout=0.1):
         super(Fuser, self).__init__()
 
-        self.controller_encoder = ControlSignalEncoder(controller_input_dim, hidden_dim, hidden_dim, dropout)
-        self.state_encoder = StateEncoder(state_input_dim, hidden_dim, hidden_dim, dropout)
+        self.state_est_encoder = StateEncoder(state_input_dim, hidden_dim, hidden_dim, dropout)
+        self.state_now_encoder = StateEncoder(state_input_dim, hidden_dim, hidden_dim, dropout)
         self.output_head_controller = nn.Sequential(
             nn.Linear(hidden_dim, fuser_output_dim),
             nn.ReLU(),
@@ -78,10 +72,10 @@ class Fuser(nn.Module):
 
         self.num_head = num_head
 
-    def forward(self, controller_input, state_input, error_encoder_output):
+    def forward(self, state_est, state_now, error_encoder_output):
         # (batch_size, hidden_dim)
-        qc, kc, vc, xc = self.controller_encoder(controller_input)
-        qs, ks, vs, xs = self.state_encoder(state_input)
+        qc, kc, vc, xc = self.state_est_encoder(state_est)
+        qs, ks, vs, xs = self.state_now_encoder(state_now)
         batch_size, hidden_dim = xc.size()
 
         qc, kc, vc, xc = self.split([qc, kc, vc, xc])
@@ -198,13 +192,14 @@ def organize_policy_input(error_encoder_model: ErrorEncoder,
     :param error_encoder_model: error encoder model
     :param fuser_model: fuser model
     :param base_motion_model: base motion model
-    :param predictor: ModelTraceInteractor
+    :param predictor: Sim_env
     :param data_arr: real state space, target points (result of env.format_state) and actions in global frame,
-                     shape (batch_size, seq_len + 1, \
+                     shape (batch_size (num_not_done), seq_len + 1, \
                             state_dim(aug) + 2 * trace_points_num(transferred to vehicle frame) + action_dim)
                      note: action in  last sequence  is just the absolute control signal(classical controller steering angle and zero Fxf)
                            but others are full control signal (classical plus nn control signal)
     :param action_dim: action dimension
+
     :return:
     """
     # (batch size, seq len + 1, n)
@@ -214,8 +209,14 @@ def organize_policy_input(error_encoder_model: ErrorEncoder,
     trace_points_last = data_arr[:, -1, state_space_aug_dim:-action_dim]  # (batch size, 2 * trace points num)
     action_seq = data_arr[:, :, -action_dim:]
 
+    last_acton = action_seq[:, -1, :].copy()  # (batch size, action dim)
+    last_acton[:, 1] = action_seq[:, -2, 1]  # set Fxf to before action's Fxf (used to estimate next state)
+
+    assert np.all(predictor.action_space.low[0] < action_seq[:, :, 0] < predictor.action_space.high[0]) and \
+        np.all(predictor.action_space.low[1] < action_seq[:, :, 1] < predictor.action_space.high[1])
+
     # (batch size, action dim)
-    abs_control_signal = torch.from_numpy(action_seq[:, -1, 0:1]).to(device)
+    # classical_control_signal = torch.from_numpy(action_seq[:, -1, 0:1]).to(device)
 
     # (batch size, state aug dim)
     base_motion_model.set_state_space(state_aug_seq[:, 0, :])
@@ -232,15 +233,19 @@ def organize_policy_input(error_encoder_model: ErrorEncoder,
     ).to(device)
 
     # (batch size, 1), (batch size, path state dim)
-    error_encoder_output, path_state_estimate = error_encoder_model(error_encoder_input.float())
+    u_est, path_state_estimate = error_encoder_model(error_encoder_input.float())
+
+    state_est = predictor.step(last_acton, normalized=True)[0]
+    state_est = torch.from_numpy(np.hstack((state_est[:, 2:state_space_dim],
+                                            state_est[:, state_space_aug_dim:]))).to(device)
 
     # build state input as same as train stage 1 (batch size, (state dim - 2) + (2 * trace points num))
-    state_input = torch.from_numpy(np.hstack((state_seq[:, -1, 2:], trace_points_last))).to(device)
+    state_now = torch.from_numpy(np.hstack((state_seq[:, -1, 2:], trace_points_last))).to(device)
 
-    fuser_input = (abs_control_signal.float(), state_input.float(), path_state_estimate)
+    fuser_input = (state_est.float(), state_now.float(), path_state_estimate)
     fuser_output = fuser_model(*fuser_input)
 
-    return error_encoder_output, fuser_output
+    return u_est, fuser_output
 
 
 if __name__ == '__main__':

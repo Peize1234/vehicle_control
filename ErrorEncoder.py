@@ -268,9 +268,10 @@ class ErrorEncoder(nn.Module):
         out_encoder3, out_encoder_trans3 = self.encoder_block3(out_encoder_trans2)
         out_encoder4, out_encoder_trans4 = self.encoder_block4(out_encoder_trans3)
 
-        out_supervise = self.out_encoder(out_encoder_trans4)
-        out_supervise = torch.mean(out_supervise, dim=1)
-        out_supervise = torch.sigmoid(out_supervise)
+        # 对道路摩擦系数的估计值
+        u_est = self.out_encoder(out_encoder_trans4)
+        u_est = torch.mean(u_est, dim=1)
+        u_est = torch.sigmoid(u_est)
 
         # out_decoder4, out_decoder_trans4 = self.decoder_block1(out_encoder4)
         # out_decoder3, out_decoder_trans3 = self.decoder_block2(out_decoder_trans4 + out_encoder3)
@@ -285,7 +286,7 @@ class ErrorEncoder(nn.Module):
                             torch.mean(self.encoder_align3(out_encoder3), dim=1) + \
                             torch.mean(self.encoder_align4(out_encoder4), dim=1)
 
-        return out_supervise, out_error_feature
+        return u_est, out_error_feature
 
     def freeze_encoder(self):
         for param in self.embedder.parameters():

@@ -253,18 +253,22 @@ def train():
 
             # abs_action = classical_controller.get_action(state[:, :state_space_aug_dim],
             #                                              method=base_control_method, zero_Fxf=True).copy()
-            classical_action = classical_controller.get_action(state[:, :state_space_aug_dim], zero_Fxf=True).copy()
+            classical_action_normalized = classical_controller.get_action(state[:, :state_space_aug_dim],
+                                                                          zero_Fxf=True,
+                                                                          with_adaptive=True,
+                                                                          action_normalize=True).copy()
 
             state_action_seq.append("state", state, env.done)
-            state_action_seq.append("action", classical_action, env.done)
+            state_action_seq.append("action", classical_action_normalized, env.done)
 
+            # 选择没有结束的车辆的状态和动作序列，构造为长度为 error_encoder_seq_len + 1 的时序输入 (取最后n个状态和动作)
             input_state = construct_sequence_input(state_action_seq, error_encoder_seq_len + 1, env.done)
 
             # select action with policy
             # print(state.shape)
-            relative_action = ppo_agent.select_action(input_state, env.done)
+            relative_action_normalized = ppo_agent.select_action(input_state, env.done)
 
-            total_action = np.clip(classical_action + relative_action, -1, 1)
+            total_action = np.clip(classical_action_normalized + relative_action_normalized, -1, 1)
             state_action_seq.set_item("action", total_action, index=-1, done=env.done)
 
             (state_add_to_buffer, reward_add_to_buffer, done_add_to_buffer, state, reward, output_done) = env.step(

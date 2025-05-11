@@ -41,27 +41,8 @@ class SimEnv(ModelTraceInteractor, gym.Env):
         # self.theta_threshold_radians = 12 * 2 * math.pi / 360
         self.x_threshold = 5
 
-        # delta, Fxf
-        action_high = np.array([
-            np.deg2rad(40),
-            4000
-        ], dtype=np.float32)
-
-        # x, y, phi, Ux, Uy, r
-        observation_high = np.array([
-            np.finfo(np.float32).max,
-            np.finfo(np.float32).max,
-            2 * np.pi,
-            np.finfo(np.float32).max,
-            np.finfo(np.float32).max,
-            np.finfo(np.float32).max,
-        ], dtype=np.float32)
-
-        observation_low = -observation_high.copy()
-        observation_low[2] = 0
-
-        self.action_space = spaces.Box(-action_high, action_high, dtype=np.float32)
-        self.observation_space = spaces.Box(-observation_high, observation_high, dtype=np.float32)
+        self.action_space = spaces.Box(- self.action_high, self.action_high, dtype=np.float32)
+        self.observation_space = spaces.Box(- self.observation_high, self.observation_high, dtype=np.float32)
 
         self.fig, self.ax = plt.subplots()
 
@@ -212,7 +193,10 @@ class SimEnv(ModelTraceInteractor, gym.Env):
         reward[~self.old_done & self.done] = -5000
         # reward = self.calculate_reward()
 
-        output_select = ~self.done | (~self.old_done & self.done)
+        # 更新后没有结束的车辆正常输出，同时上一时刻没有结束但是现在结束的车辆也要输出，用于训练过程中 reward 计算
+        # output_select = ~self.done | (~self.old_done & self.done)
+        # 等价于：(不完全等价，但是 old_done 为 True 同时 done 为 False 的情况不存在，所以在此场景中等价)
+        output_select = ~ self.old_done
 
         # 检查正常结束的车辆，必须要放在这里，不影响 output_select，但是影响 done(用于下一次计算的状态)
         self.check_normal_done()
@@ -258,9 +242,12 @@ class SimEnv(ModelTraceInteractor, gym.Env):
                 axis=1
             )
         elif self.stage == 2:
+            state_space_aug_idx = self.state_space_aug[idx].copy()
+            state_space_aug_idx[:, 2:state_space_dim] /= np.array([[self.phi_limit[1], self.Ux_limit[1],
+                                                                    self.Uy_limit[1], self.r_limit[1]]])
             return np.concatenate(
                 (
-                    self.state_space_aug[idx],
+                    state_space_aug_idx,
                     trace_points_trans[:, 0, :],  # closed point in trace in vehicle coordinate
                     trace_points_trans_diff.reshape(trace_points_trans_diff.shape[0], -1)
                 ),

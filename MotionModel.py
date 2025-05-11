@@ -40,6 +40,25 @@ class BicycleModel:
         self.sigma_f = sigma_f
         self.sigma_r = sigma_r
 
+        # delta, Fxf
+        self.action_high = np.array([
+            np.deg2rad(40),
+            4000
+        ], dtype=np.float32)
+
+        # x, y, phi, Ux, Uy, r
+        self.observation_high = np.array([
+            np.finfo(np.float32).max,
+            np.finfo(np.float32).max,
+            2 * np.pi,
+            np.finfo(np.float32).max,
+            np.finfo(np.float32).max,
+            np.finfo(np.float32).max,
+        ], dtype=np.float32)
+
+        self.observation_low = - self.observation_high.copy()
+        self.observation_low[2] = 0
+
         if init_state_space is not None:
             # x, y, phi, Ux, Uy, r
             if init_state_space.shape[-1] == state_space_dim:
@@ -163,19 +182,24 @@ class BicycleModel:
         else:
             raise ValueError("method should be 'RungeKutta' or 'eular'")
 
-    def step_once(self, delta, Fxf, u=0.8, dt=0.01, method='RungeKutta', return_aug_space=False):
+    def step_once(self, delta, Fxf, u=u_ref, dt=0.01, method='RungeKutta', return_aug_space=False,
+                  used_normalized_action=False):
         """
         :param delta: 车辆转向角(逆时针旋转为正)，shape=(num_vehicle,)，一般范围在-40°～40°
         :param Fxf: 前轮摩擦力，shape=(num_vehicle,)， 一般范围在-4000～4000N
         :param u: 摩擦系数，shape=(num_vehicle,) or scalar, 取值一般在0.3～1
         :param dt: 时间步长
         :param method: 预测方法，'RungeKutta' or 'eular'
-        :param done: 是否停止更新车辆的状态
         :param return_aug_space: 是否返回增广状态空间
+        :param used_normalized_action: 所采取的动作是否经过了归一化
 
         :return: 状态空间，shape=(num_vehicle(not done), state_space_dim / state_space_aug_dim)
         """
         assert self.state_space is not None
+
+        if used_normalized_action:
+            delta = delta * self.action_high[0]
+            Fxf = Fxf * self.action_high[1]
 
         if self.state_space.shape[0] != 1:
             assert delta.shape[0] == Fxf.shape[0] == self.state_space[~self.done].shape[0]
@@ -191,7 +215,8 @@ class BicycleModel:
             return self.state_space_aug[~self.done]
         return self.state_space[~self.done]
 
-    def step_n(self, delta, Fxf, u, dt=0.01, method='RungeKutta', return_aug_space=False, add_raw_state_space=False):
+    def step_n(self, delta, Fxf, u, dt=0.01, method='RungeKutta', return_aug_space=False, add_raw_state_space=False,
+               used_normalized_action=False):
         """
         :param delta: 车辆转向角(逆时针旋转为正)，shape=(num_vehicle, sequence_num)
         :param Fxf: 前轮受力，shape=(num_vehicle, sequence_num)
@@ -200,6 +225,7 @@ class BicycleModel:
         :param method: 预测方法，'RungeKutta' or 'eular'
         :param return_aug_space: 是否返回增广状态空间
         :param add_raw_state_space: 是否返回原始状态空间(step 0 时的初始状态)
+        :param used_normalized_action: 所采取的动作是否经过了归一化
 
         :return: 状态空间，shape=(num_vehicle, sequence_num, state_space_dim)
         """
@@ -213,7 +239,8 @@ class BicycleModel:
             delta_i = delta[:, i]
             Fxf_i = Fxf[:, i]
             u_i = u[:, i]
-            out_list.append(self.step_once(delta_i, Fxf_i, u_i, dt, method, return_aug_space).copy())
+            out_list.append(self.step_once(delta_i, Fxf_i, u_i, dt, method, return_aug_space,
+                                           used_normalized_action).copy())
 
         if add_raw_state_space:
             return np.stack(out_list, axis=1)

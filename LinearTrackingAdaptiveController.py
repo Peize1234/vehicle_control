@@ -27,7 +27,7 @@ class LinearTrackingAdaptiveController(ModelTraceInteractor):
         self.A, self.B = None, None
         self.A_d, self.B_d = None, None
         self.K = None
-        self.u_est = 0
+        self.delta_est = 0
         self.dt = 0.1
         self.C = np.array([[1, 0, 0, 0],
                            [0, 0, 1, 0]])
@@ -158,16 +158,31 @@ class LinearTrackingAdaptiveController(ModelTraceInteractor):
         error_state = self.error_state[:, :, None]
         return np.squeeze(self.K @ error_state, axis=2)
 
-    def get_action(self, now_state: np.ndarray, target_v=3, zero_Fxf=False) -> np.ndarray:
+    def get_action(self, now_state: np.ndarray, target_v=3, zero_Fxf=False,
+                   with_adaptive=False, action_normalize=False) -> np.ndarray:
         """
         Get the actions in lengthways and lateral
         :param now_state: current state, shape (batch_size, state_dim)
         :param target_v: target speed
+        :param zero_Fxf: whether to set Fxf to zero
+        :param with_adaptive: whether to use adaptive controller
+        :param action_normalize: whether to normalize the action
+
         :return: action, shape ( batch_size, total_control_dim( lateral(dim=1) and lengthways(dim=1) ) )
         """
         vx = self.state_space[:, 3]
         lengthways_control_value = base_lengthways_control(vx, target_v) if not zero_Fxf else np.zeros(vx.shape)
         lateral_control_value = np.squeeze(self.get_controller_value(now_state), axis=1)
+
+        if with_adaptive:
+            lateral_control_value += np.squeeze(self.get_adjust_action(action_normalize), axis=1)
+
+        if action_normalize:
+            lateral_control_value /= self.action_high[0]
+            lateral_control_value = np.clip(lateral_control_value, -1, 1)
+            lengthways_control_value /= self.action_high[1]
+            lengthways_control_value = np.clip(lengthways_control_value, -1, 1)
+
         return np.array([lateral_control_value, lengthways_control_value]).T
 
     def error_state_update(self) -> np.ndarray:
@@ -179,16 +194,20 @@ class LinearTrackingAdaptiveController(ModelTraceInteractor):
         self.error_state = np.squeeze(self.error_state, axis=2)
         return self.error_state
 
-    def get_adjust_action(self):
+    def get_adjust_action(self, action_normalize=False) -> np.ndarray:
         """
         Get the RL controller tracking result
         """
-        beta = np.squeeze(self.gamma * self.B_d @ self.error_state[:, :, None], axis=2)
+        beta = np.squeeze(self.gamma * self.B_d.transpose(0, 2, 1) @ self.error_state[:, :, None], axis=2)
 
-        u_est_dot = - self.gamma * self.B_d @ (self.A_d + self.B_d @ self.K) @ self.error_state[:, :, None]
-        self.u_est = self.u_est + np.squeeze(u_est_dot, axis=2) * self.dt
+        delta_est_dot = - self.gamma * self.B_d.transpose(0, 2, 1) @ (self.A_d + self.B_d @ self.K) @ self.error_state[:, :, None]
+        self.delta_est = self.delta_est + np.squeeze(delta_est_dot, axis=2) * self.dt
 
-        adaptive_control_value = self.u_est + beta
+        adaptive_control_value = self.delta_est + beta
+
+        if action_normalize:
+            adaptive_control_value /= self.action_high[0]
+            adaptive_control_value = np.clip(adaptive_control_value, -1, 1)
 
         return - adaptive_control_value
 
@@ -233,7 +252,7 @@ if __name__ == '__main__':
     while True:
         print(i)
         print(state)
-        action = controller.get_action(state[:, :state_space_aug_dim], target_v=3)
+        action = controller.get_action(state[:, :state_space_aug_dim], target_v=3, with_adaptive=True)
         # print(action)
         # print(controller.get_controller_value(state[:, :state_space_aug_dim]))
         action = np.clip(action, env.action_space.low, env.action_space.high)

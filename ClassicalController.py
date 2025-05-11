@@ -13,14 +13,17 @@ class ClassicalController(ModelTraceInteractor):
         """
         super().__init__(np.zeros((num_vehicles, state_space_dim)), trace_path)
 
-    def get_action(self, state, method="pure_pursuit", zero_Fxf=False, **kwargs):
+    def get_action(self, state, method="pure_pursuit", zero_Fxf=False, action_normalize=False, **kwargs):
         """
         Get the action based on the current state and method.
 
-        ::param state: The current state of the environment. shape: (num_vehicles, state_space_dim)
-        ::param method: The method used to get the action. "pure_pursuit" or "".
+        :param state: The current state of the environment. shape: (num_vehicles, state_space_dim)
+        :param method: The method used to get the action. "pure_pursuit" or "".
+        :param zero_Fxf: Whether to set the Fxf action to zero.
+        :param action_normalize: Whether to normalize the action to [-1, 1].
+        :param kwargs: Other parameters for the method.
 
-        ::return: The action for each vehicle. shape: (num_vehicles, action_space_dim)
+        :return: The action for each vehicle. shape: (num_vehicles, action_space_dim)
         """
         controller = getattr(self, method, None)
         if method is None:
@@ -29,6 +32,9 @@ class ClassicalController(ModelTraceInteractor):
         control_signal = controller(**kwargs)
         if zero_Fxf:
             control_signal[:, 1] = 0
+        if action_normalize:
+            control_signal /= self.action_high
+            control_signal = np.clip(control_signal, -1, 1)
         return control_signal
 
     def base_lengthways_control(self, target_speed=3):
