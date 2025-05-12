@@ -177,6 +177,9 @@ class SimEnv(ModelTraceInteractor, gym.Env):
         :param return_raw_state: whether to return the raw state_space or not
         :return: state
         """
+        # 防止 action *= np.array([self.action_space.high]) 修改外部传入的 action
+        action = action.copy()
+
         if normalized:
             assert np.all(action >= -1) and np.all(action <= 1), ("%r (%s) invalid" % (action, type(action)))
             action *= np.array([self.action_space.high])

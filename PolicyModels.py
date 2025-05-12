@@ -207,35 +207,39 @@ def organize_policy_input(error_encoder_model: ErrorEncoder,
     state_aug_seq = data_arr[:, :, :state_space_aug_dim]
     state_seq = data_arr[:, :, :state_space_dim].copy()
     trace_points_last = data_arr[:, -1, state_space_aug_dim:-action_dim]  # (batch size, 2 * trace points num)
-    action_seq = data_arr[:, :, -action_dim:]
+    action_normalized_seq = data_arr[:, :, -action_dim:]
 
-    last_acton = action_seq[:, -1, :].copy()  # (batch size, action dim)
-    last_acton[:, 1] = action_seq[:, -2, 1]  # set Fxf to before action's Fxf (used to estimate next state)
+    last_normalized_acton = action_normalized_seq[:, -1, :].copy()  # (batch size, action dim)
+    last_normalized_acton[:, 1] = action_normalized_seq[:, -2, 1]  # set Fxf to before action's Fxf (used to estimate next state)
 
-    assert np.all(predictor.action_space.low[0] < action_seq[:, :, 0] < predictor.action_space.high[0]) and \
-        np.all(predictor.action_space.low[1] < action_seq[:, :, 1] < predictor.action_space.high[1])
+    assert np.all(-1 <= action_normalized_seq[:, :, 0]) and np.all(action_normalized_seq[:, :, 0] <= 1) and \
+           np.all(-1 <= action_normalized_seq[:, :, 1]) and np.all(action_normalized_seq[:, :, 1] <= 1), \
+           "Action space is not valid"
 
     # (batch size, action dim)
-    # classical_control_signal = torch.from_numpy(action_seq[:, -1, 0:1]).to(device)
+    # classical_control_signal = torch.from_numpy(action_normalized_seq[:, -1, 0:1]).to(device)
 
     # (batch size, state aug dim)
     base_motion_model.set_state_space(state_aug_seq[:, 0, :])
     # (batch size, seq len + 1, state dim)
-    simulate_state = base_motion_model.step_n(action_seq[:, :-1, 0], action_seq[:, :-1, 1],
+    simulate_state = base_motion_model.step_n(action_normalized_seq[:, :-1, 0],
+                                              action_normalized_seq[:, :-1, 1],
                                               np.ones((batch_size, seq_len_plus1 - 1), dtype=np.float32) * u_ref,
-                                              return_aug_space=False, add_raw_state_space=True)
+                                              return_aug_space=False,
+                                              add_raw_state_space=True,
+                                              used_normalized_action=True)
 
     # (batch size, seq len, state dim)
     real_sim_diff = state_diff(state_seq, simulate_state) * 1e2
 
     error_encoder_input = torch.from_numpy(
-        np.concatenate((real_sim_diff, action_seq[:, :-1, :]), axis=-1)
+        np.concatenate((real_sim_diff, action_normalized_seq[:, :-1, :]), axis=-1)
     ).to(device)
 
     # (batch size, 1), (batch size, path state dim)
     u_est, path_state_estimate = error_encoder_model(error_encoder_input.float())
 
-    state_est = predictor.step(last_acton, normalized=True)[0]
+    state_est = predictor.step(last_normalized_acton, normalized=True)[0]
     state_est = torch.from_numpy(np.hstack((state_est[:, 2:state_space_dim],
                                             state_est[:, state_space_aug_dim:]))).to(device)
 

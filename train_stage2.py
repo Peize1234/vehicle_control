@@ -253,6 +253,7 @@ def train():
             # abs_action = classical_controller.get_action(state[:, :state_space_aug_dim],
             #                                              method=base_control_method, zero_Fxf=True).copy()
             classical_action_normalized = classical_controller.get_action(state[:, :state_space_aug_dim],
+                                                                          done=env.done,
                                                                           zero_Fxf=True,
                                                                           with_adaptive=True,
                                                                           action_normalize=True).copy()
