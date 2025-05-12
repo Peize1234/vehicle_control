@@ -181,14 +181,13 @@ def train():
     base_motion_model = BicycleModel(None)
 
     # fuser model parameters
-    fuser_controller_input_dim = 1
     fuser_state_input_dim = state_space_dim - 2 + (env.dest_points_num + 1) * env.env_dim
     fuser_output_dim = 10
     fuser_hidden_dim = 128
     fuser_num_head = 8
     fuser_dropout = 0.1
 
-    fuser = Fuser(fuser_controller_input_dim, fuser_state_input_dim, fuser_output_dim,
+    fuser = Fuser(fuser_state_input_dim, fuser_output_dim,
                   fuser_hidden_dim, fuser_num_head, fuser_dropout)
 
     # used for raw ppo policy input

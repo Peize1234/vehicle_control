@@ -249,7 +249,7 @@ def organize_policy_input(error_encoder_model: ErrorEncoder,
 
 
 if __name__ == '__main__':
-    model = Fuser(controller_input_dim=1, state_input_dim=6, fuser_output_dim=10, hidden_dim=128, dropout=0.1)
+    model = Fuser(state_input_dim=6, fuser_output_dim=10, hidden_dim=128, dropout=0.1)
 
     x1 = np.random.rand(100, 1)
     x2 = np.random.rand(100, 6)
