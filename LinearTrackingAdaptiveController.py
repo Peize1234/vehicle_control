@@ -23,11 +23,13 @@ class LinearTrackingAdaptiveController(ModelTraceInteractor):
         """
         super().__init__(np.zeros((num_vehicles, state_space_aug_dim)), trace_path)
 
+        self.num_vehicles = num_vehicles
+
         self.error_state = None
         self.A, self.B = None, None
         self.A_d, self.B_d = None, None
         self.K = None
-        self.delta_est = 0
+        self.delta_est = np.zeros((num_vehicles, 1))
         self.dt = 0.1
         self.C = np.array([[1, 0, 0, 0],
                            [0, 0, 1, 0]])
@@ -158,11 +160,12 @@ class LinearTrackingAdaptiveController(ModelTraceInteractor):
         error_state = self.error_state[:, :, None]
         return np.squeeze(self.K @ error_state, axis=2)
 
-    def get_action(self, now_state: np.ndarray, target_v=3, zero_Fxf=False,
-                   with_adaptive=False, action_normalize=False) -> np.ndarray:
+    def get_action(self, now_state: np.ndarray, done: np.ndarray = None, target_v: float = 3, zero_Fxf: bool = False,
+                   with_adaptive: bool = False, action_normalize: bool = False) -> np.ndarray:
         """
         Get the actions in lengthways and lateral
-        :param now_state: current state, shape (batch_size, state_dim)
+        :param now_state: current state, shape (batch_size(num not done), state_dim)
+        :param done: whether each vehicle is done, shape (total_num_vehicles, )
         :param target_v: target speed
         :param zero_Fxf: whether to set Fxf to zero
         :param with_adaptive: whether to use adaptive controller
@@ -170,12 +173,15 @@ class LinearTrackingAdaptiveController(ModelTraceInteractor):
 
         :return: action, shape ( batch_size, total_control_dim( lateral(dim=1) and lengthways(dim=1) ) )
         """
+        # update vehicle state parameters
+        self.set_state_space(now_state)
+
         vx = self.state_space[:, 3]
         lengthways_control_value = base_lengthways_control(vx, target_v) if not zero_Fxf else np.zeros(vx.shape)
         lateral_control_value = np.squeeze(self.get_controller_value(now_state), axis=1)
 
         if with_adaptive:
-            lateral_control_value += np.squeeze(self.get_adjust_action(action_normalize), axis=1)
+            lateral_control_value += np.squeeze(self.get_adjust_action(action_normalize, done), axis=1)
 
         if action_normalize:
             lateral_control_value /= self.action_high[0]
@@ -194,16 +200,23 @@ class LinearTrackingAdaptiveController(ModelTraceInteractor):
         self.error_state = np.squeeze(self.error_state, axis=2)
         return self.error_state
 
-    def get_adjust_action(self, action_normalize=False) -> np.ndarray:
+    def get_adjust_action(self, action_normalize: bool = False, done_idx: np.ndarray = None) -> np.ndarray:
         """
         Get the RL controller tracking result
+        :param action_normalize: whether the action is normalized
+        :param done_idx: index of done vehicles, shape (total_num_vehicles, )
+
+        :return: RL controller tracking result, shape (batch_size(num not done), lateral_control_dim(1))
         """
+        if done_idx is None:
+            done_idx = np.zeros(self.num_vehicles, dtype=bool)
+
         beta = np.squeeze(self.gamma * self.B_d.transpose(0, 2, 1) @ self.error_state[:, :, None], axis=2)
 
         delta_est_dot = - self.gamma * self.B_d.transpose(0, 2, 1) @ (self.A_d + self.B_d @ self.K) @ self.error_state[:, :, None]
-        self.delta_est = self.delta_est + np.squeeze(delta_est_dot, axis=2) * self.dt
+        self.delta_est[~done_idx] = self.delta_est[~done_idx] + np.squeeze(delta_est_dot, axis=2) * self.dt
 
-        adaptive_control_value = self.delta_est + beta
+        adaptive_control_value = self.delta_est[~done_idx] + beta
 
         if action_normalize:
             adaptive_control_value /= self.action_high[0]
