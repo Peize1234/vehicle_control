@@ -156,7 +156,7 @@ class SimEnv(ModelTraceInteractor, gym.Env):
             assert done is None and old_done is None, "done and old_done must both be None or both be not None"
             done = np.zeros(state_space_aug.shape[0], dtype=bool)
             self.old_done = np.zeros(state_space_aug.shape[0], dtype=bool)
-        if done is not None or old_done is not None:
+        else:
             assert done is not None and old_done is not None, "done and old_done must both be None or both be not None"
             assert done.shape[0] == old_done.shape[0] == state_space_aug.shape[0], \
                 "done and old_done must have the same shape as state_space_aug"
