@@ -178,7 +178,8 @@ def train():
     classical_controller = LinearTrackingAdaptiveController(trace_path, num_vehicles)
 
     # bicycle model
-    base_motion_model = BicycleModel(None)
+    # base_motion_model = BicycleModel(None)
+    state_action_processor = SimEnv(trace_path, num_vehicles, stage)
 
     # fuser model parameters
     fuser_state_input_dim = state_space_dim - 2 + (env.dest_points_num + 1) * env.env_dim
@@ -197,11 +198,11 @@ def train():
     ppo_agent = PPOPlus(policy_input_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip,
                         has_continuous_action_space,
                         classical_controller,
-                        base_motion_model,
-                        env,
+                        state_action_processor,
                         error_encoder,
                         fuser,
-                        action_std, env.num_vehicles)
+                        action_std,
+                        env.num_vehicles)
     # ppo_agent = PPO(policy_input_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip,
     #                 has_continuous_action_space, action_std, num_vehicles)
 

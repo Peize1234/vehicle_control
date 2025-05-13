@@ -117,15 +117,13 @@ class Fuser(nn.Module):
 class ActorCriticPlus(ActorCritic):
     def __init__(self, policy_input_dim, action_dim, has_continuous_action_space, action_std_init,
                  Classical_Controller: Union[ClassicalController, LinearTrackingAdaptiveController],
-                 Base_Motion_Model: BicycleModel,
-                 Predictor: SimEnv,
+                 State_Action_Processor: SimEnv,
                  Error_Encoder: ErrorEncoder,
                  Fuser_Model: Fuser):
         super(ActorCriticPlus, self).__init__(policy_input_dim, action_dim, has_continuous_action_space,
                                               action_std_init)
         self.classical_controller = Classical_Controller
-        self.base_motion_model = Base_Motion_Model
-        self.predictor = Predictor
+        self.state_action_processor = State_Action_Processor
         self.error_encoder = Error_Encoder
         self.fuser = Fuser_Model
 
@@ -136,8 +134,7 @@ class ActorCriticPlus(ActorCritic):
         """
         _, policy_input = organize_policy_input(self.error_encoder,
                                                 self.fuser,
-                                                self.base_motion_model,
-                                                deepcopy(self.predictor),  # deepcopy to avoid changing predictor's state (predictor is raw sim_env)
+                                                self.state_action_processor,
                                                 data_input)
 
         return super(ActorCriticPlus, self).act(policy_input)
@@ -145,8 +142,7 @@ class ActorCriticPlus(ActorCritic):
     def evaluate(self, data_input, action):
         error_encoder_output, policy_input = organize_policy_input(self.error_encoder,
                                                                    self.fuser,
-                                                                   self.base_motion_model,
-                                                                   deepcopy(self.predictor),  # deepcopy to avoid changing predictor's state (predictor is raw sim_env)
+                                                                   self.state_action_processor,
                                                                    data_input)
 
         return *super(ActorCriticPlus, self).evaluate(policy_input, action), error_encoder_output
@@ -156,25 +152,23 @@ class PPOPlus(PPO):
     def __init__(self, policy_input_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip,
                  has_continuous_action_space,
                  Classical_Controller: Union[ClassicalController, LinearTrackingAdaptiveController],
-                 Base_Motion_Model: BicycleModel,
-                 Predictor: SimEnv,
+                 State_Action_Processor: SimEnv,
                  Error_Encoder: ErrorEncoder,
                  Fuser_Model: Fuser,
-                 action_std_init=0.6, num_vehicles=1):
+                 action_std_init: float = 0.6,
+                 num_vehicles: int = 1):
         super(PPOPlus, self).__init__(policy_input_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip,
                                       has_continuous_action_space, action_std_init, num_vehicles)
 
         self.policy = ActorCriticPlus(policy_input_dim, action_dim, has_continuous_action_space, action_std_init,
                                       Classical_Controller,
-                                      Base_Motion_Model,
-                                      Predictor,
+                                      State_Action_Processor,
                                       Error_Encoder,
                                       Fuser_Model).to(device)
 
         self.policy_old = ActorCriticPlus(policy_input_dim, action_dim, has_continuous_action_space, action_std_init,
                                           Classical_Controller,
-                                          Base_Motion_Model,
-                                          Predictor,
+                                          State_Action_Processor,
                                           Error_Encoder,
                                           Fuser_Model).to(device)
         self.policy_old.load_state_dict(self.policy.state_dict())
@@ -182,19 +176,17 @@ class PPOPlus(PPO):
 
 def organize_policy_input(error_encoder_model: ErrorEncoder,
                           fuser_model: Fuser,
-                          base_motion_model: BicycleModel,
-                          predictor: SimEnv,
+                          state_action_processor: SimEnv,
                           data_arr: np.ndarray,
-                          action_dim=2):
+                          action_dim: int = 2):
     """
     step function for inference
 
     :param error_encoder_model: error encoder model
     :param fuser_model: fuser model
-    :param base_motion_model: base motion model
-    :param predictor: Sim_env
+    :param state_action_processor: base motion model、 model_trace interactor and data formatter
     :param data_arr: real state space, target points (result of env.format_state) and actions in global frame,
-                     shape (batch_size (num_not_done), seq_len + 1, \
+                     shape (batch_size (num_not_done(for data generation) or total_batch(for training)), seq_len + 1, \
                             state_dim(aug) + 2 * trace_points_num(transferred to vehicle frame) + action_dim)
                      note: action in  last sequence  is just the absolute control signal(classical controller steering angle and zero Fxf)
                            but others are full control signal (classical plus nn control signal)
@@ -220,14 +212,16 @@ def organize_policy_input(error_encoder_model: ErrorEncoder,
     # classical_control_signal = torch.from_numpy(action_normalized_seq[:, -1, 0:1]).to(device)
 
     # (batch size, state aug dim)
-    base_motion_model.set_state_space(state_aug_seq[:, 0, :])
+    state_action_processor.set_state_space(state_aug_seq[:, 0, :])
     # (batch size, seq len + 1, state dim)
-    simulate_state = base_motion_model.step_n(action_normalized_seq[:, :-1, 0],
-                                              action_normalized_seq[:, :-1, 1],
-                                              np.ones((batch_size, seq_len_plus1 - 1), dtype=np.float32) * u_ref,
-                                              return_aug_space=False,
-                                              add_raw_state_space=True,
-                                              used_normalized_action=True)
+    # step_n 函数在类 BicycleModel 中定义，此处不涉及 env 中与路径相关的互交
+    simulate_state = state_action_processor.step_n(action_normalized_seq[:, :-1, 0],
+                                                   action_normalized_seq[:, :-1, 1],
+                                                   np.ones((batch_size, seq_len_plus1 - 1),
+                                                           dtype=np.float32) * u_ref,
+                                                   return_aug_space=False,
+                                                   add_raw_state_space=True,
+                                                   used_normalized_action=True)
 
     # (batch size, seq len, state dim)
     real_sim_diff = state_diff(state_seq, simulate_state) * 1e2
@@ -239,7 +233,9 @@ def organize_policy_input(error_encoder_model: ErrorEncoder,
     # (batch size, 1), (batch size, path state dim)
     u_est, path_state_estimate = error_encoder_model(error_encoder_input.float())
 
-    state_est = predictor.step(last_normalized_acton, normalized=True)[0]
+    # 最后一时刻的状态是当前的状态，利用最后一时刻的状态估计下一时刻的状态
+    state_action_processor.set_state_space(state_aug_seq[:, -1, :])
+    state_est = state_action_processor.step(last_normalized_acton, normalized=True)[0]
     state_est = torch.from_numpy(np.hstack((state_est[:, 2:state_space_dim],
                                             state_est[:, state_space_aug_dim:]))).to(device)
 

@@ -87,6 +87,7 @@ class BicycleModel:
         if done is None:
             self.done = np.zeros(self.state_space.shape[0], dtype=bool)
         else:
+            assert done.shape[0] == self.state_space.shape[0], "done shape should be equal to state_space shape"
             self.done = done
 
     def get_Fy(self, alpha, C, u, Fz):

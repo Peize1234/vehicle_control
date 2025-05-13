@@ -122,6 +122,51 @@ class SimEnv(ModelTraceInteractor, gym.Env):
         self.np_random, seed = seeding.np_random(seed)
         return [seed]
 
+    def _init_env_param(self) -> None:
+        """
+        根据基础变量： state_space_aug 和 done 计算其余环境参数
+        """
+        (self.trace_points[:, 0, :], self.closed_curve_idx,
+         self.closed_t) = self.get_vehicle_closed_trace_point(accuracy=1e-6)
+        self.trace_points[:, 1:, :], self.trace_points_rates_norm[:, 1:, :] = self.get_n_points_rate_along_trace(
+            self.closed_curve_idx,
+            self.closed_t,
+            gap_distance=self.gap_distance,
+            requires_n_points=self.dest_points_num)
+        self.trace_points_rates_norm[:, 0, :] = self.get_n_points_rate_along_trace(self.closed_curve_idx,
+                                                                                   self.closed_t,
+                                                                                   gap_distance=0,
+                                                                                   requires_n_points=1)[0].squeeze(1)
+        self.delta = np.empty(self.num_vehicles)
+        self.Fxf = np.empty(self.num_vehicles)
+        self.init = True
+
+    def set_state_space(self, state_space_aug: np.ndarray,
+                        done: np.ndarray = None,
+                        old_done: np.ndarray = None) -> None:
+        """
+        设置 state_space 和 done，并基于此重新初始化环境参数
+        note: done 和 old_done 必须同时给出，或者都不给出
+
+        :param state_space_aug: 形状为 (batch_size, state_space_aug_dim)
+        :param done: 形状为 (batch_size,) or None(全部不结束)，表示是否结束
+        :param old_done: 形状为 (batch_size,) or None(全部不结束)，表示上一时刻是否结束
+        """
+        if done is None or old_done is None:
+            assert done is None and old_done is None, "done and old_done must both be None or both be not None"
+            done = np.zeros(state_space_aug.shape[0], dtype=bool)
+            self.old_done = np.zeros(state_space_aug.shape[0], dtype=bool)
+        if done is not None or old_done is not None:
+            assert done is not None and old_done is not None, "done and old_done must both be None or both be not None"
+            assert done.shape[0] == old_done.shape[0] == state_space_aug.shape[0], \
+                "done and old_done must have the same shape as state_space_aug"
+
+        super().set_state_space(state_space_aug, done)
+
+        # num_vehicles may be changed after reset
+        self.num_vehicles = self.state_space.shape[0]
+        self._init_env_param()
+
     def reset(self, checkpoint: np.ndarray = None) -> np.ndarray:
         """
         Resets the environment
@@ -152,20 +197,8 @@ class SimEnv(ModelTraceInteractor, gym.Env):
         self.set_state_space(np.hstack((self.state_space, np.zeros((self.num_vehicles,
                                                                     state_space_aug_dim - state_space_dim)))))
         self.done = np.zeros(self.num_vehicles, dtype=bool)
-        (self.trace_points[:, 0, :], self.closed_curve_idx,
-         self.closed_t) = self.get_vehicle_closed_trace_point(accuracy=1e-6)
-        self.trace_points[:, 1:, :], self.trace_points_rates_norm[:, 1:, :] = self.get_n_points_rate_along_trace(
-            self.closed_curve_idx,
-            self.closed_t,
-            gap_distance=self.gap_distance,
-            requires_n_points=self.dest_points_num)
-        self.trace_points_rates_norm[:, 0, :] = self.get_n_points_rate_along_trace(self.closed_curve_idx,
-                                                                                   self.closed_t,
-                                                                                   gap_distance=0,
-                                                                                   requires_n_points=1)[0].squeeze(1)
-        self.delta = np.empty(self.num_vehicles)
-        self.Fxf = np.empty(self.num_vehicles)
-        self.init = True
+
+        self._init_env_param()
 
         return self.format_state(~self.done)
 
