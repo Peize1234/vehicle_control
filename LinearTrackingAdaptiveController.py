@@ -10,6 +10,7 @@ from utils import base_lengthways_control
 from MotionModel import state_space_dim, state_space_aug_dim
 
 
+
 class LinearTrackingAdaptiveController(ModelTraceInteractor):
     def __init__(self, trace_path: str, num_vehicles: int,
                  Q: np.ndarray = np.diag([1, 0, 1, 0]), R: np.ndarray = np.diag([1]), gamma=1):
