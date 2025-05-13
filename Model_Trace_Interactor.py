@@ -9,7 +9,6 @@ import warnings
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 
-
 class ModelTraceInteractor(Trace, BicycleModel):
     def __init__(self, init_vehicle_state: np.ndarray, trace_path=None,
                  target_points=None, start_point_rate=None, end_point_rate=None, dt=0.01, seed=1, plot=False):

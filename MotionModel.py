@@ -2,7 +2,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-
 state_space_dim = 6
 state_space_aug_dim = 8
 u_ref = 0.7

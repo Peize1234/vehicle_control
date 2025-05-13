@@ -1,6 +1,5 @@
 # 对应于 train_stage2.py 的测试部分
 
-
 import os
 import glob
 import time

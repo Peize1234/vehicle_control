@@ -6,7 +6,6 @@ from scipy.linalg import expm
 import sympy as sp
 
 
-
 class ClassicalController(ModelTraceInteractor):
     def __init__(self, trace_path: str, num_vehicles=50, state_space_dim=6):
         """

@@ -1,6 +1,5 @@
 # 这部分用于训练用于路径状态感知的 transformer 模型
 
-
 import torch
 from torch.utils.data import DataLoader, Dataset
 from pathlib import Path

@@ -269,7 +269,6 @@ def train():
             # print(state.shape)
             relative_action_normalized = ppo_agent.select_action(input_state, env.done)
 
-
             total_action = np.clip(classical_action_normalized + relative_action_normalized, -1, 1)
             state_action_seq.set_item("action", total_action, index=-1, done=env.done)
 

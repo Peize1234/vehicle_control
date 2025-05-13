@@ -233,7 +233,6 @@ def organize_policy_input(error_encoder_model: ErrorEncoder,
     # (batch size, 1), (batch size, path state dim)
     u_est, path_state_estimate = error_encoder_model(error_encoder_input.float())
 
-
     # 最后一时刻的状态是当前的状态，利用最后一时刻的状态估计下一时刻的状态
     state_action_processor.set_state_space(state_aug_seq[:, -1, :])
     state_est = state_action_processor.step(last_normalized_acton, normalized=True)[0]
