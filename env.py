@@ -72,6 +72,12 @@ class SimEnv(ModelTraceInteractor, gym.Env):
 
         self.env_dim = 2
 
+        # 基础变量，后续所有变量都基于此变量计算
+        self.state_space = np.empty((self.num_vehicles, self.observation_space.shape[0]))
+        self.state_space_aug = np.empty((self.num_vehicles, state_space_aug_dim))
+        self.old_done = np.zeros(self.num_vehicles, dtype=bool)
+        self.done = np.zeros(self.num_vehicles, dtype=bool)
+
         self._init_runtime_param()
 
     def _init_runtime_param(self):
@@ -79,9 +85,6 @@ class SimEnv(ModelTraceInteractor, gym.Env):
         初始化运行时变量
         """
         # 运行时变量(运行时变量的形状不发生改变)
-        self.state_space = np.empty((self.num_vehicles, self.observation_space.shape[0]))
-        self.old_done = np.zeros(self.num_vehicles, dtype=bool)
-        self.done = np.zeros(self.num_vehicles, dtype=bool)
         self.trace_points = np.empty(
             (self.num_vehicles, self.dest_points_num + 1, self.env_dim))  # first points is closed points
         self.trace_points_rates_norm = np.empty((self.num_vehicles, self.dest_points_num + 1, self.env_dim))
