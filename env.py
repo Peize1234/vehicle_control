@@ -333,6 +333,10 @@ class SimEnv(ModelTraceInteractor, gym.Env):
         vehicle_rates_norm = self.forward_norm_vector
         diff_angle = np.arccos(np.sum(closed_points_rates_norm * vehicle_rates_norm, axis=1))
 
+        if np.any(np.isnan(diff_angle)):
+            print(diff_angle)
+            raise ValueError("diff_angle is nan")
+
         # 检查车辆与最近轨迹点的夹角是否超过设置的最大值
         done_idx_angle = diff_angle > self.max_deviation_angle
 

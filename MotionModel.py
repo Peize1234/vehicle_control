@@ -149,8 +149,8 @@ class BicycleModel:
         alpha_f_dot = self.V[not_done] / self.sigma_f * (np.arctan2(Uy + self.a * r, Ux) - delta - alpha_f)
         alpha_r_dot = self.V[not_done] / self.sigma_r * (np.arctan2(Uy - self.b * r, Ux) - alpha_r)
         # np.seterr(all='warn')
-        if np.any(np.isnan(alpha_f_dot) | np.isinf(alpha_f_dot)):
-            print()
+        # if np.any(np.isnan(alpha_f_dot) | np.isinf(alpha_f_dot)):
+        #     print()
 
         return X_dot, Y_dot, phi_dot, Ux_dot, Uy_dot, r_dot, alpha_f_dot, alpha_r_dot
 
