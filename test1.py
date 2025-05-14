@@ -6,6 +6,7 @@ import itertools
 from pathlib import Path
 import os
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
+np.seterr(all='raise')
 
 a = np.array([1, 2, 3, 4, 5])
-print(1 < a < 3)
+print(a / 0)

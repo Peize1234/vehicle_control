@@ -83,12 +83,12 @@ class BicycleModel:
     def set_state_space(self, state_space_aug, done=None):
         assert state_space_aug.shape[-1] == state_space_aug_dim, "state_space shape should be (sequence_num, 8)"
         self.state_space = state_space_aug[:, :state_space_dim].copy()
-        self.state_space_aug = state_space_aug  # alpha_f, alpha_r
+        self.state_space_aug = state_space_aug.copy()  # alpha_f, alpha_r
         if done is None:
             self.done = np.zeros(self.state_space.shape[0], dtype=bool)
         else:
             assert done.shape[0] == self.state_space.shape[0], "done shape should be equal to state_space shape"
-            self.done = done
+            self.done = done.copy()
 
     def get_Fy(self, alpha, C, u, Fz):
         Fy = np.where(np.abs(alpha) < np.arctan(3 * u * Fz / C),
@@ -144,8 +144,13 @@ class BicycleModel:
         Uy_dot = (Fyr + Fyf * np.cos(delta) + Fxf * np.sin(delta)) / self.m - r * Ux
         r_dot = (self.a * Fyf * np.cos(delta) + self.a * Fxf * np.sin(delta) - self.b * Fyr) / self.Iz
 
+        # for debug
+        # np.seterr(all='raise')
         alpha_f_dot = self.V[not_done] / self.sigma_f * (np.arctan2(Uy + self.a * r, Ux) - delta - alpha_f)
         alpha_r_dot = self.V[not_done] / self.sigma_r * (np.arctan2(Uy - self.b * r, Ux) - alpha_r)
+        # np.seterr(all='warn')
+        if np.any(np.isnan(alpha_f_dot) | np.isinf(alpha_f_dot)):
+            print()
 
         return X_dot, Y_dot, phi_dot, Ux_dot, Uy_dot, r_dot, alpha_f_dot, alpha_r_dot
 
@@ -237,9 +242,9 @@ class BicycleModel:
 
         out_list = [self.state_space_aug.copy() if return_aug_space else self.state_space.copy()]
         for i in range(delta.shape[1]):
-            delta_i = delta[:, i]
-            Fxf_i = Fxf[:, i]
-            u_i = u[:, i]
+            delta_i = delta[:, i].copy()
+            Fxf_i = Fxf[:, i].copy()
+            u_i = u[:, i].copy()
             out_list.append(self.step_once(delta_i, Fxf_i, u_i, dt, method, return_aug_space,
                                            used_normalized_action).copy())
 

@@ -50,7 +50,7 @@ def train():
     ## Note : print/log frequencies should be > than max_ep_len
 
     ################ PPO hyperparameters ################
-    update_timestep = max_ep_len * 2  # update policy every n timesteps
+    update_timestep = max_ep_len * 2 * 0.01  # update policy every n timesteps
     K_epochs = 80  # update policy for K epochs in one PPO update
 
     eps_clip = 0.2  # clip parameter for PPO
@@ -267,6 +267,8 @@ def train():
 
             # select action with policy
             # print(state.shape)
+            if np.any(input_state > 4000) or np.any(input_state[:, :, :2] < -3):
+                print("input_state > 4000")
             relative_action_normalized = ppo_agent.select_action(input_state, env.done)
 
             total_action = np.clip(classical_action_normalized + relative_action_normalized, -1, 1)

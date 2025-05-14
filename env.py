@@ -72,6 +72,12 @@ class SimEnv(ModelTraceInteractor, gym.Env):
 
         self.env_dim = 2
 
+        self._init_runtime_param()
+
+    def _init_runtime_param(self):
+        """
+        初始化运行时变量
+        """
         # 运行时变量(运行时变量的形状不发生改变)
         self.state_space = np.empty((self.num_vehicles, self.observation_space.shape[0]))
         self.old_done = np.zeros(self.num_vehicles, dtype=bool)
@@ -122,7 +128,7 @@ class SimEnv(ModelTraceInteractor, gym.Env):
         self.np_random, seed = seeding.np_random(seed)
         return [seed]
 
-    def _init_env_param(self) -> None:
+    def _update_model_trace_interact_param(self) -> None:
         """
         根据基础变量： state_space_aug 和 done 计算其余环境参数
         """
@@ -152,6 +158,9 @@ class SimEnv(ModelTraceInteractor, gym.Env):
         :param done: 形状为 (batch_size,) or None(全部不结束)，表示是否结束
         :param old_done: 形状为 (batch_size,) or None(全部不结束)，表示上一时刻是否结束
         """
+        # 防止修改外部传入的 state_space_aug
+        state_space_aug = state_space_aug.copy()
+
         if done is None or old_done is None:
             assert done is None and old_done is None, "done and old_done must both be None or both be not None"
             done = np.zeros(state_space_aug.shape[0], dtype=bool)
@@ -160,12 +169,16 @@ class SimEnv(ModelTraceInteractor, gym.Env):
             assert done is not None and old_done is not None, "done and old_done must both be None or both be not None"
             assert done.shape[0] == old_done.shape[0] == state_space_aug.shape[0], \
                 "done and old_done must have the same shape as state_space_aug"
+            done = done.copy()
+            self.old_done = old_done.copy()
 
         super().set_state_space(state_space_aug, done)
 
         # num_vehicles may be changed after reset
         self.num_vehicles = self.state_space.shape[0]
-        self._init_env_param()
+
+        self._init_runtime_param()
+        self._update_model_trace_interact_param()
 
     def reset(self, checkpoint: np.ndarray = None) -> np.ndarray:
         """
@@ -198,7 +211,7 @@ class SimEnv(ModelTraceInteractor, gym.Env):
                                                                     state_space_aug_dim - state_space_dim)))))
         self.done = np.zeros(self.num_vehicles, dtype=bool)
 
-        self._init_env_param()
+        self._update_model_trace_interact_param()
 
         return self.format_state(~self.done)
 
@@ -278,12 +291,12 @@ class SimEnv(ModelTraceInteractor, gym.Env):
                 axis=1
             )
         elif self.stage == 2:
-            state_space_aug_idx = self.state_space_aug[idx].copy()
-            state_space_aug_idx[:, 2:state_space_dim] /= np.array([[self.phi_limit[1], self.Ux_limit[1],
-                                                                    self.Uy_limit[1], self.r_limit[1]]])
+            # state_space_aug_idx = self.state_space_aug[idx].copy()
+            # state_space_aug_idx[:, 2:state_space_dim] /= np.array([[self.phi_limit[1], self.Ux_limit[1],
+            #                                                         self.Uy_limit[1], self.r_limit[1]]])
             return np.concatenate(
                 (
-                    state_space_aug_idx,
+                    self.state_space_aug[idx].copy(),
                     trace_points_trans[:, 0, :],  # closed point in trace in vehicle coordinate
                     trace_points_trans_diff.reshape(trace_points_trans_diff.shape[0], -1)
                 ),

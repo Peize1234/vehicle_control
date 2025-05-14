@@ -196,10 +196,10 @@ def organize_policy_input(error_encoder_model: ErrorEncoder,
     """
     # (batch size, seq len + 1, n)
     batch_size, seq_len_plus1, n = data_arr.shape
-    state_aug_seq = data_arr[:, :, :state_space_aug_dim]
+    state_aug_seq = data_arr[:, :, :state_space_aug_dim].copy()
     state_seq = data_arr[:, :, :state_space_dim].copy()
-    trace_points_last = data_arr[:, -1, state_space_aug_dim:-action_dim]  # (batch size, 2 * trace points num)
-    action_normalized_seq = data_arr[:, :, -action_dim:]
+    trace_points_last = data_arr[:, -1, state_space_aug_dim:-action_dim].copy()  # (batch size, 2 * trace points num)
+    action_normalized_seq = data_arr[:, :, -action_dim:].copy()
 
     last_normalized_acton = action_normalized_seq[:, -1, :].copy()  # (batch size, action dim)
     last_normalized_acton[:, 1] = action_normalized_seq[:, -2, 1]  # set Fxf to before action's Fxf (used to estimate next state)
@@ -241,6 +241,15 @@ def organize_policy_input(error_encoder_model: ErrorEncoder,
 
     # build state input as same as train stage 1 (batch size, (state dim - 2) + (2 * trace points num))
     state_now = torch.from_numpy(np.hstack((state_seq[:, -1, 2:], trace_points_last))).to(device)
+
+    state_est[:, :state_space_dim - 2] /= torch.tensor([[state_action_processor.phi_limit[1],
+                                                         state_action_processor.Ux_limit[1],
+                                                         state_action_processor.Uy_limit[1],
+                                                         state_action_processor.r_limit[1]]], device=device)
+    state_now[:, :state_space_dim - 2] /= torch.tensor([[state_action_processor.phi_limit[1],
+                                                         state_action_processor.Ux_limit[1],
+                                                         state_action_processor.Uy_limit[1],
+                                                         state_action_processor.r_limit[1]]], device=device)
 
     fuser_input = (state_est.float(), state_now.float(), path_state_estimate)
     fuser_output = fuser_model(*fuser_input)
