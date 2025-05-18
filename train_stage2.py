@@ -30,7 +30,7 @@ def train():
     print("============================================================================================")
 
     ####### initialize environment hyperparameters ######
-    env_name = "AutoDrive-v2.5"
+    env_name = "AutoDrive-v2.6-调参"
 
     has_continuous_action_space = True  # continuous action space; else discrete
 
@@ -50,8 +50,9 @@ def train():
     ## Note : print/log frequencies should be > than max_ep_len
 
     ################ PPO hyperparameters ################
-    update_timestep = max_ep_len * 2  # update policy every n timesteps
-    K_epochs = 80  # update policy for K epochs in one PPO update
+    update_timestep = max_ep_len * 4  # update policy every n timesteps
+    # log_freq = max(update_timestep, log_freq)  # make sure log_freq >= update_timestep
+    K_epochs = 120  # update policy for K epochs in one PPO update
 
     eps_clip = 0.2  # clip parameter for PPO
     gamma = 0.99  # discount factor
@@ -249,6 +250,7 @@ def train():
         state_action_seq = MultiListContainer(["state", "action"], env.num_vehicles)
 
         u_rand = np.random.uniform(0.7, 0.8, size=max_ep_len)
+        classical_controller.init_controller()
         for t in range(1, max_ep_len + 1):
 
             # abs_action = classical_controller.get_action(state[:, :state_space_aug_dim],
@@ -256,7 +258,7 @@ def train():
             classical_action_normalized = classical_controller.get_action(state[:, :state_space_aug_dim],
                                                                           done=env.done,
                                                                           zero_Fxf=True,
-                                                                          with_adaptive=True,
+                                                                          with_adaptive=False,
                                                                           action_normalize=True).copy()
 
             state_action_seq.append("state", state, env.done)
@@ -304,8 +306,7 @@ def train():
                 ppo_agent.decay_action_std(action_std_decay_rate, min_action_std)
 
             # log in logging file
-            if time_step % log_freq == 0:
-                # log average reward till last episode
+            if time_step % log_freq == 0:                # log average reward till last episode
                 log_avg_reward = log_running_reward / log_running_episodes
                 log_avg_reward = np.round(log_avg_reward, 4)
 

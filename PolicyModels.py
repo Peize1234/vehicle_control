@@ -202,7 +202,7 @@ def organize_policy_input(error_encoder_model: ErrorEncoder,
     action_normalized_seq = data_arr[:, :, -action_dim:].copy()
 
     last_normalized_acton = action_normalized_seq[:, -1, :].copy()  # (batch size, action dim)
-    last_normalized_acton[:, 1] = action_normalized_seq[:, -2, 1]  # set Fxf to before action's Fxf (used to estimate next state)
+    # last_normalized_acton[:, 1] = action_normalized_seq[:, -2, 1]  # set Fxf to before action's Fxf (used to estimate next state)
 
     assert np.all(-1 <= action_normalized_seq[:, :, 0]) and np.all(action_normalized_seq[:, :, 0] <= 1) and \
            np.all(-1 <= action_normalized_seq[:, :, 1]) and np.all(action_normalized_seq[:, :, 1] <= 1), \

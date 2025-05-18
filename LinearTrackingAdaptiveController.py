@@ -37,6 +37,12 @@ class LinearTrackingAdaptiveController(ModelTraceInteractor):
         self.R = R
         self.gamma = gamma
 
+    def init_controller(self):
+        self.delta_est = np.zeros((num_vehicles, 1))
+
+    def set_adaptive_param(self, delta_est_before: np.ndarray):
+
+
     def update_controller(self, new_state_space_aug: np.ndarray) -> None:
         """
         Update the controller matrix by new vehicle state
@@ -160,12 +166,19 @@ class LinearTrackingAdaptiveController(ModelTraceInteractor):
         error_state = self.error_state[:, :, None]
         return np.squeeze(self.K @ error_state, axis=2)
 
-    def get_action(self, now_state: np.ndarray, done: np.ndarray = None, target_v: float = 3, zero_Fxf: bool = False,
-                   with_adaptive: bool = False, action_normalize: bool = False) -> np.ndarray:
+    def get_action(self,
+                   now_state: np.ndarray,
+                   done: np.ndarray = None,
+                   adaptive_delta: np.ndarray = None,
+                   target_v: float = 3,
+                   zero_Fxf: bool = False,
+                   with_adaptive: bool = False,
+                   action_normalize: bool = False) -> np.ndarray:
         """
         Get the actions in lengthways and lateral
         :param now_state: current state, shape (batch_size(num not done), state_dim)
         :param done: whether each vehicle is done, shape (total_num_vehicles, )
+        :param adaptive_delta: adaptive controller delta tracking result, shape (batch_size(num not done), lateral_control_dim(1))
         :param target_v: target speed
         :param zero_Fxf: whether to set Fxf to zero
         :param with_adaptive: whether to use adaptive controller
@@ -189,7 +202,7 @@ class LinearTrackingAdaptiveController(ModelTraceInteractor):
             lengthways_control_value /= self.action_high[1]
             lengthways_control_value = np.clip(lengthways_control_value, -1, 1)
 
-        return np.array([lateral_control_value, lengthways_control_value]).T
+        return np.array([lateral_control_value, lengthways_control_value]).T,
 
     def error_state_update(self) -> np.ndarray:
         """
