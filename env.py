@@ -14,7 +14,7 @@ from MotionModel import state_space_dim, state_space_aug_dim
 
 
 class SimEnv(ModelTraceInteractor, gym.Env):
-    def __init__(self, trace_path: str, num_vehicles: int = 50, stage: int = 1):
+    def __init__(self, trace_path: str, num_vehicles: int = 50, stage: int = 1, show=True):
         assert num_vehicles > 0, 'num_vehicles must be greater than 0'
 
         # zero state_space space for init params
@@ -44,7 +44,8 @@ class SimEnv(ModelTraceInteractor, gym.Env):
         self.action_space = spaces.Box(- self.action_high, self.action_high, dtype=np.float32)
         self.observation_space = spaces.Box(- self.observation_high, self.observation_high, dtype=np.float32)
 
-        self.fig, self.ax = plt.subplots()
+        if show:
+            self.fig, self.ax = plt.subplots()
 
         # init state_space(observation) space limit
         self.phi_limit = [-np.deg2rad(30), np.deg2rad(30)]
@@ -218,12 +219,17 @@ class SimEnv(ModelTraceInteractor, gym.Env):
 
         return self.format_state(~self.done)
 
-    def step(self, action: np.ndarray, normalized: bool = False, return_raw_state: bool = False) -> tuple:
+    def step(self,
+             action: np.ndarray,
+             normalized: bool = False,
+             return_raw_state: bool = False,
+             test: bool = False) -> tuple:
         """
         Performs a single step of the environment
         :param action: (delta, Fxf) shape=(num_not_done, 2)
         :param normalized: whether the action is normalized or not
         :param return_raw_state: whether to return the raw state_space or not
+        :param test: whether to test the model or not
         :return: state
         """
         # 防止 action *= np.array([self.action_space.high]) 修改外部传入的 action
@@ -267,6 +273,8 @@ class SimEnv(ModelTraceInteractor, gym.Env):
         if self.stage == 1:
             return state_add_to_buffer, reward_add_to_buffer, done_add_to_buffer, state_next, reward_next, done_next
         elif self.stage == 2:
+            if test:
+                return state_next, reward_next, done_next
             return state_add_to_buffer, reward_add_to_buffer, done_add_to_buffer, state_next, reward_next, ~output_select
         else:
             raise ValueError("Invalid stage")
