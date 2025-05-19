@@ -197,14 +197,14 @@ class SimEnv(ModelTraceInteractor, gym.Env):
         #             phi Ux Uy r
         sub_factors = [2, 5, np.inf, np.inf]
         # x, y, phi, Ux, Uy, r
-        self.state_space = self.np_random.uniform(low=np.array([- 1,
-                                                                - 1,
+        self.state_space = self.np_random.uniform(low=np.array([0,
+                                                                0,
                                                                 self.phi_limit[0] / sub_factors[0],
                                                                 self.Ux_limit[0] / sub_factors[1],
                                                                 self.Uy_limit[0] / sub_factors[2],
                                                                 self.r_limit[0] / sub_factors[3]]),
-                                                  high=np.array([1,
-                                                                 1,
+                                                  high=np.array([0.5,
+                                                                 0.5,
                                                                  self.phi_limit[1] / sub_factors[0],
                                                                  self.Ux_limit[1] / sub_factors[1],
                                                                  self.Uy_limit[1] / sub_factors[2],

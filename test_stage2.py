@@ -180,6 +180,9 @@ def test():
             #     print("input_state > 4000")
             relative_action_normalized = ppo_agent.select_action(input_state, env.done)
 
+            print("classical_action_normalized: ", classical_action_normalized)
+            print("RL_action_normalized: ", relative_action_normalized)
+
             total_action = np.clip(classical_action_normalized + relative_action_normalized, -1, 1)
             state_action_seq.set_item("action", total_action, index=-1, done=env.done)
 
