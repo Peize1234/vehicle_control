@@ -250,16 +250,17 @@ def train():
         state_action_seq = MultiListContainer(["state", "action"], env.num_vehicles)
 
         u_rand = np.random.uniform(0.7, 0.8, size=max_ep_len)
-        classical_controller.init_controller()
+        delta_est = classical_controller.init_adaptive_param()
         for t in range(1, max_ep_len + 1):
 
             # abs_action = classical_controller.get_action(state[:, :state_space_aug_dim],
             #                                              method=base_control_method, zero_Fxf=True).copy()
-            classical_action_normalized = classical_controller.get_action(state[:, :state_space_aug_dim],
-                                                                          done=env.done,
-                                                                          zero_Fxf=True,
-                                                                          with_adaptive=False,
-                                                                          action_normalize=True).copy()
+            classical_action_normalized, delta_est = classical_controller.get_action(state[:, :state_space_aug_dim],
+                                                                                     done=env.done,
+                                                                                     adaptive_delta=delta_est,
+                                                                                     zero_Fxf=True,
+                                                                                     with_adaptive=False,
+                                                                                     action_normalize=True)
 
             state_action_seq.append("state", state, env.done)
             state_action_seq.append("action", classical_action_normalized, env.done)
