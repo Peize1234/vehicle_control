@@ -247,7 +247,7 @@ def train():
         # state = env.reset(np.arange(0, env.target_points.shape[0], env.target_points.shape[0] // env.num_vehicles)[:-1])
 
         current_ep_reward = np.zeros(env.num_vehicles)
-        state_action_seq = MultiListContainer(["state", "action"], env.num_vehicles)
+        state_action_seq = MultiListContainer(["state", "action"], env.num_vehicles, max_len=error_encoder_seq_len + 1)
 
         u_rand = np.random.uniform(0.7, 0.8, size=max_ep_len)
         delta_est = classical_controller.init_adaptive_param()
@@ -281,13 +281,9 @@ def train():
                 total_action, normalized=True)
 
             # saving reward and is_terminals
-            j = 0
-            for i in range(len(output_done)):
-                if not output_done[i]:
-                    ppo_agent.buffer.rewards[i].append(reward_add_to_buffer[j])
-                    ppo_agent.buffer.is_terminals[i].append(done_add_to_buffer[j])
-                    ppo_agent.buffer.u[i].append(torch.tensor([u_rand[t-1]]))
-                    j += 1
+            ppo_agent.buffer.append(["rewards", "is_terminals", "u"],
+                                    [reward_add_to_buffer, done_add_to_buffer, torch.tensor([u_rand[t - 1]])],
+                                    output_done)
 
             time_step += 1
             current_ep_reward[~output_done] += reward_add_to_buffer
@@ -372,6 +368,9 @@ def construct_sequence_input(state_action_seq_container: MultiListContainer, seq
     :param done: done flag of each vehicle (batch_size(vehicle_num),)
     :return: sequence input for ppo agent. shape: (batch_size(num_not_done), seq_len, state_dim + action_dim)
     """
+    assert state_action_seq_container.max_len >= seq_len, \
+        "state_action_seq_container.max_len should be greater than or equal to seq_len"
+
     state_seq_arr = np.stack(np.array(state_action_seq_container.get("state"),
                              dtype=object)[~done]).astype(np.float32)[:, -seq_len:, :]
     action_seq_arr = np.stack(np.array(state_action_seq_container.get("action"),
@@ -387,23 +386,6 @@ def construct_sequence_input(state_action_seq_container: MultiListContainer, seq
     # TODO: using dict data structure is better
     # input_state = {"state_seq": state_seq_arr, "action_seq": action_seq_arr}
     return input_state
-
-
-def update_sequence(state_seq: np.array, action_seq: list, state, action, seq_max_len):
-    """
-    update state_seq and action_seq
-    :param state_seq: list of states [(batch_size, state_dim), ...]
-    :param action_seq: list of actions [(batch_size, action_dim), ...]
-    :param state: new state (batch_size, state_dim)
-    :param action: new action (batch_size, action_dim)
-    :return: updated state_seq and action_seq (list)
-    """
-    state_seq.append(state)
-    action_seq.append(action)
-    if len(state_seq) > seq_max_len:
-        state_seq.pop(0)
-        action_seq.pop(0)
-    return state_seq, action_seq
 
 
 if __name__ == '__main__':

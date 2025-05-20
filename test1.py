@@ -1,13 +1,8 @@
 import numpy as np
-import matplotlib.pyplot as plt
-import pandas as pd
-import torch
-import itertools
-from pathlib import Path
-import os
-os.environ['KMP_DUPLICATE_LIB_OK']='True'
-np.seterr(all='raise')
+from collections import deque
+import sys
 
-a = {1: 2, 2: 3, 3: 4, 4: 5, 5: 6, 6: 7}
+a = [np.zeros(100, dtype=int)]
+print(sys.getsizeof(np.zeros(1000, dtype=int)))
 
-print(len(a))
+print(sys.getsizeof(a))

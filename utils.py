@@ -3,6 +3,7 @@ import torch
 from Model_Trace_Interactor import ModelTraceInteractor
 from scipy.linalg import expm
 from sympy import Matrix, symbols, exp, diag, integrate
+from collections import deque
 
 
 class ReplayBuffer(object):
@@ -43,12 +44,12 @@ class ReplayBuffer(object):
 
 def state_diff(real_state, reference_state):
     """
-	Calculate the difference between two states in it's previous state. (mainly used for error encoder previous process)
+        Calculate the difference between two states in it's previous state. (mainly used for error encoder previous process)
 
-	:param real_state: 车辆实际运行时的状态, shape (batch_size, seq_len + 1, state_dim)
-	:param reference_state: 参考状态, shape (batch_size, seq_len + 1, state_dim)
-	:return: 状态差, shape (batch_size, seq_len, state_dim)
-	"""
+        :param real_state: 车辆实际运行时的状态, shape (batch_size, seq_len + 1, state_dim)
+        :param reference_state: 参考状态, shape (batch_size, seq_len + 1, state_dim)
+        :return: 状态差, shape (batch_size, seq_len, state_dim)
+    """
     assert real_state.shape == reference_state.shape, "real_state and reference_state must have same shape"
 
     for i in range(1, real_state.shape[1]):
@@ -74,11 +75,19 @@ def state_diff(real_state, reference_state):
 
 
 class MultiListContainer(object):
-    def __init__(self, keys: list, num_sub_lists: int):
+    def __init__(self, keys: list, num_sub_lists: int, max_len: int = 100):
+        """
+        A container for multiple lists with different keys. Each list is a deque with a maximum length.
+
+        :param keys: A list of keys for the lists.
+        :param num_sub_lists: The number of sub-lists for each key.
+        :param max_len: The maximum length of each sub-list.
+        """
         self.dict_buffer = {}
         for key in keys:
-            self.dict_buffer[key] = [[] for _ in range(num_sub_lists)]
+            self.dict_buffer[key] = [deque(maxlen=max_len) for _ in range(num_sub_lists)]
         self.num_sub_lists = num_sub_lists
+        self.max_len = max_len
 
     def append(self, key: str, value: np.ndarray, done: np.ndarray = None):
         if done is None:
