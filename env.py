@@ -146,7 +146,8 @@ class SimEnv(ModelTraceInteractor, gym.Env):
         self.trace_points_rates_norm[:, 0, :] = self.get_n_points_rate_along_trace(self.closed_curve_idx,
                                                                                    self.closed_t,
                                                                                    gap_distance=0,
-                                                                                   requires_n_points=1)[0].squeeze(1)
+                                                                                   requires_n_points=1)[1].squeeze(1)
+
         self.delta = np.empty(self.num_vehicles)
         self.Fxf = np.empty(self.num_vehicles)
         self.init = True
@@ -216,6 +217,11 @@ class SimEnv(ModelTraceInteractor, gym.Env):
         self.done = np.zeros(self.num_vehicles, dtype=bool)
 
         self._update_model_trace_interact_param()
+
+        closed_points_rate = self.closed_points_and_rates[1]
+        closed_rate2angle = np.arctan2(closed_points_rate[:, 1], closed_points_rate[:, 0])
+        self.state_space[:, 2] += closed_rate2angle
+        self.state_space_aug[:, 2] += closed_rate2angle
 
         return self.format_state(~self.done)
 
@@ -394,7 +400,8 @@ class SimEnv(ModelTraceInteractor, gym.Env):
         # reward = (np.sum((distances_norm + angles_norm) * weight / (self.dest_points_num + 1), axis=1) +
         #           self.state_space[~self.done, 3] / self.max_speed_x)
 
-        reward = np.where(distances[:, 0] < self.max_distance / 10, self.state_space[~self.done, 3], 0)
+        reward = np.where(distances[:, 0] < self.max_distance / 10,
+                          np.linalg.norm(self.state_space[~self.done, 3:5], axis=1), 0)
 
         return reward
 

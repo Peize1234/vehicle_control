@@ -1,8 +1,9 @@
 import numpy as np
 from collections import deque
 import sys
+import os
+from pathlib import Path
 
-a = [np.zeros(100, dtype=int)]
-print(sys.getsizeof(np.zeros(1000, dtype=int)))
-
-print(sys.getsizeof(a))
+a = np.array([1, 2])
+print(np.linalg.norm(a))
+print(np.sqrt(a[0] ** 2 + a[1] ** 2))

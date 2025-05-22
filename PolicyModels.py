@@ -132,20 +132,22 @@ class ActorCriticPlus(ActorCritic):
         :param data_input: state space, target points and actions in global frame,
                            shape (batch_size, seq_len + 1, state_dim(aug) + 2 * target_points_num + action_dim)
         """
-        _, policy_input = organize_policy_input(self.error_encoder,
-                                                self.fuser,
-                                                self.state_action_processor,
-                                                data_input)
+        policy_input, intermediate_variables = organize_policy_input(self.error_encoder,
+                                                                     self.fuser,
+                                                                     self.state_action_processor,
+                                                                     data_input,
+                                                                     eval=False)
 
-        return super(ActorCriticPlus, self).act(policy_input)
+        return *super(ActorCriticPlus, self).act(policy_input), intermediate_variables
 
     def evaluate(self, data_input, action):
-        error_encoder_output, policy_input = organize_policy_input(self.error_encoder,
-                                                                   self.fuser,
-                                                                   self.state_action_processor,
-                                                                   data_input)
+        policy_input = organize_policy_input(self.error_encoder,
+                                             self.fuser,
+                                             self.state_action_processor,
+                                             data_input,
+                                             eval=True)
 
-        return *super(ActorCriticPlus, self).evaluate(policy_input, action), error_encoder_output
+        return super(ActorCriticPlus, self).evaluate(policy_input, action)
 
 
 class PPOPlus(PPO):
@@ -156,9 +158,10 @@ class PPOPlus(PPO):
                  Error_Encoder: ErrorEncoder,
                  Fuser_Model: Fuser,
                  action_std_init: float = 0.6,
-                 num_vehicles: int = 1):
+                 num_vehicles: int = 1,
+                 buffer_size: int = 20):
         super(PPOPlus, self).__init__(policy_input_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip,
-                                      has_continuous_action_space, action_std_init, num_vehicles)
+                                      has_continuous_action_space, action_std_init, num_vehicles, buffer_size)
 
         self.policy = ActorCriticPlus(policy_input_dim, action_dim, has_continuous_action_space, action_std_init,
                                       Classical_Controller,
@@ -173,12 +176,56 @@ class PPOPlus(PPO):
                                           Fuser_Model).to(device)
         self.policy_old.load_state_dict(self.policy.state_dict())
 
+        self.models = [self.policy, self.policy_old, Error_Encoder, Fuser_Model]
+
+        # 必须重新写，否则 optimizer 中的权重是父类中定义的网络的权重
+        self.optimizer = torch.optim.Adam([
+                        {'params': self.policy.actor.parameters(), 'lr': lr_actor},
+                        {'params': self.policy.critic.parameters(), 'lr': lr_critic},
+                        {"params": self.policy.error_encoder.parameters()},
+                        {"params": self.policy.fuser.parameters()}
+                    ])
+
+    def train(self):
+        for model in self.models:
+            model.train()
+
+    def eval(self):
+        for model in self.models:
+            model.eval()
+
+    def select_action(self, state: np.ndarray, done: np.ndarray) -> np.ndarray:
+        """
+        Select action for given state as per current policy.
+        :param state: state to select action for
+        :param done: (optional) done flag to indicate that episode has terminated
+        :return: action to take (numpy array)
+        """
+
+        assert state.shape[0] == np.sum(~done), "Number of states and done flags should be equal"
+
+        with torch.no_grad():
+            action, action_logprob, state_val, additional_data = self.policy_old.act(state)
+
+        state = torch.FloatTensor(state).to(device)
+
+        self.buffer.append(["states", "actions", "logprobs", "state_values"],
+                           [state, action, action_logprob, state_val],
+                           done)
+        self.buffer.append(["error_encoder_input", "state_est", "state_now"],
+                           [additional_data["error_encoder_input"], additional_data["state_est"],
+                            additional_data["state_now"]],
+                           done)
+
+        return action.detach().cpu().numpy()
+
 
 def organize_policy_input(error_encoder_model: ErrorEncoder,
                           fuser_model: Fuser,
                           state_action_processor: SimEnv,
-                          data_arr: np.ndarray,
-                          action_dim: int = 2):
+                          data_arr: Union[np.ndarray, dict],
+                          action_dim: int = 2,
+                          eval: bool = False):
     """
     step function for inference
 
@@ -191,71 +238,98 @@ def organize_policy_input(error_encoder_model: ErrorEncoder,
                      note: action in  last sequence  is just the absolute control signal(classical controller steering angle and zero Fxf)
                            but others are full control signal (classical plus nn control signal)
     :param action_dim: action dimension
+    :param eval: whether in eval mode or not
+    :param additional_data: additional data for data generation
 
     :return:
     """
-    # (batch size, seq len + 1, n)
-    batch_size, seq_len_plus1, n = data_arr.shape
-    state_aug_seq = data_arr[:, :, :state_space_aug_dim].copy()
-    state_seq = data_arr[:, :, :state_space_dim].copy()
-    trace_points_last = data_arr[:, -1, state_space_aug_dim:-action_dim].copy()  # (batch size, 2 * trace points num)
-    action_normalized_seq = data_arr[:, :, -action_dim:].copy()
+    if eval:
+        assert isinstance(data_arr, dict)
+        assert "error_encoder_input" in data_arr and \
+               "state_est" in data_arr and "state_now" in data_arr, \
+            "additional data should contain 'error_encoder_input', " \
+            "'state_est' and'state_now' in eval mode"
+    else:
+        assert isinstance(data_arr, np.ndarray)
 
-    last_normalized_acton = action_normalized_seq[:, -1, :].copy()  # (batch size, action dim)
-    last_normalized_acton[:, 1] = np.ones_like(action_normalized_seq[:, -2, 1]) * 0.5  # set Fxf to 2000 (used to estimate next state)
-    # last_normalized_acton[:, 1] = action_normalized_seq[:, -2, 1]  # set Fxf to before action's Fxf (used to estimate next state)
+    if not eval:
+        # (batch size, seq len + 1, n)
+        batch_size, seq_len_plus1, n = data_arr.shape
+        state_aug_seq = data_arr[:, :, :state_space_aug_dim].copy()
+        state_seq = data_arr[:, :, :state_space_dim].copy()
+        trace_points_last = data_arr[:, -1, state_space_aug_dim:-action_dim].copy()  # (batch size, 2 * trace points num)
+        action_normalized_seq = data_arr[:, :, -action_dim:].copy()
 
-    assert np.all(-1 <= action_normalized_seq[:, :, 0]) and np.all(action_normalized_seq[:, :, 0] <= 1) and \
-           np.all(-1 <= action_normalized_seq[:, :, 1]) and np.all(action_normalized_seq[:, :, 1] <= 1), \
-           "Action space is not valid"
+        last_normalized_acton = action_normalized_seq[:, -1, :].copy()  # (batch size, action dim)
+        last_normalized_acton[:, 1] = np.ones_like(action_normalized_seq[:, -2, 1]) * 0.5  # set Fxf to 2000 (used to estimate next state)
+        # last_normalized_acton[:, 1] = action_normalized_seq[:, -2, 1]  # set Fxf to before action's Fxf (used to estimate next state)
 
-    # (batch size, action dim)
-    # classical_control_signal = torch.from_numpy(action_normalized_seq[:, -1, 0:1]).to(device)
+        assert np.all(-1 <= action_normalized_seq[:, :, 0]) and np.all(action_normalized_seq[:, :, 0] <= 1) and \
+               np.all(-1 <= action_normalized_seq[:, :, 1]) and np.all(action_normalized_seq[:, :, 1] <= 1), \
+               "Action space is not valid"
 
-    # (batch size, state aug dim)
-    state_action_processor.set_state_space(state_aug_seq[:, 0, :])
-    # (batch size, seq len + 1, state dim)
-    # step_n 函数在类 BicycleModel 中定义，此处不涉及 env 中与路径相关的互交
-    simulate_state = state_action_processor.step_n(action_normalized_seq[:, :-1, 0],
-                                                   action_normalized_seq[:, :-1, 1],
-                                                   np.ones((batch_size, seq_len_plus1 - 1),
-                                                           dtype=np.float32) * u_ref,
-                                                   return_aug_space=False,
-                                                   add_raw_state_space=True,
-                                                   used_normalized_action=True)
+        # (batch size, action dim)
+        # classical_control_signal = torch.from_numpy(action_normalized_seq[:, -1, 0:1]).to(device)
 
-    # (batch size, seq len, state dim)
-    real_sim_diff = state_diff(state_seq, simulate_state) * 1e2
+        # (batch size, state aug dim)
+        state_action_processor.set_state_space(state_aug_seq[:, 0, :])
+        # (batch size, seq len + 1, state dim)
+        # step_n 函数在类 BicycleModel 中定义，此处不涉及 env 中与路径相关的互交
+        simulate_state = state_action_processor.step_n(action_normalized_seq[:, :-1, 0],
+                                                       action_normalized_seq[:, :-1, 1],
+                                                       np.ones((batch_size, seq_len_plus1 - 1),
+                                                               dtype=np.float32) * u_ref,
+                                                       return_aug_space=False,
+                                                       add_raw_state_space=True,
+                                                       used_normalized_action=True)
 
-    error_encoder_input = torch.from_numpy(
-        np.concatenate((real_sim_diff, action_normalized_seq[:, :-1, :]), axis=-1)
-    ).to(device)
+        # (batch size, seq len, state dim)
+        real_sim_diff = state_diff(state_seq, simulate_state) * 1e2
 
-    # (batch size, 1), (batch size, path state dim)
-    u_est, path_state_estimate = error_encoder_model(error_encoder_input.float())
+        error_encoder_input = torch.from_numpy(
+            np.concatenate((real_sim_diff, action_normalized_seq[:, :-1, :]), axis=-1)
+        ).to(device)
 
-    # 最后一时刻的状态是当前的状态，利用最后一时刻的状态估计下一时刻的状态
-    state_action_processor.set_state_space(state_aug_seq[:, -1, :])
-    state_est = state_action_processor.step(last_normalized_acton, normalized=True)[0]
-    state_est = torch.from_numpy(np.hstack((state_est[:, 2:state_space_dim],
-                                            state_est[:, state_space_aug_dim:]))).to(device)
+        # (batch size, 1), (batch size, path state dim)
+        u_est, path_state_estimate = error_encoder_model(error_encoder_input.float())
 
-    # build state input as same as train stage 1 (batch size, (state dim - 2) + (2 * trace points num))
-    state_now = torch.from_numpy(np.hstack((state_seq[:, -1, 2:], trace_points_last))).to(device)
+        # 最后一时刻的状态是当前的状态，利用最后一时刻的状态估计下一时刻的状态
+        state_action_processor.set_state_space(state_aug_seq[:, -1, :])
+        state_est = state_action_processor.step(last_normalized_acton, normalized=True)[0]
+        state_est = torch.from_numpy(np.hstack((state_est[:, 2:state_space_dim],
+                                                state_est[:, state_space_aug_dim:]))).to(device)
 
-    state_est[:, :state_space_dim - 2] /= torch.tensor([[state_action_processor.phi_limit[1],
-                                                         state_action_processor.Ux_limit[1],
-                                                         state_action_processor.Uy_limit[1],
-                                                         state_action_processor.r_limit[1]]], device=device)
-    state_now[:, :state_space_dim - 2] /= torch.tensor([[state_action_processor.phi_limit[1],
-                                                         state_action_processor.Ux_limit[1],
-                                                         state_action_processor.Uy_limit[1],
-                                                         state_action_processor.r_limit[1]]], device=device)
+        # build state input as same as train stage 1 (batch size, (state dim - 2) + (2 * trace points num))
+        state_now = torch.from_numpy(np.hstack((state_seq[:, -1, 2:], trace_points_last))).to(device)
 
-    fuser_input = (state_est.float(), state_now.float(), path_state_estimate)
-    fuser_output = fuser_model(*fuser_input)
+        state_est[:, :state_space_dim - 2] /= torch.tensor([[state_action_processor.phi_limit[1],
+                                                             state_action_processor.Ux_limit[1],
+                                                             state_action_processor.Uy_limit[1],
+                                                             state_action_processor.r_limit[1]]], device=device)
+        state_now[:, :state_space_dim - 2] /= torch.tensor([[state_action_processor.phi_limit[1],
+                                                             state_action_processor.Ux_limit[1],
+                                                             state_action_processor.Uy_limit[1],
+                                                             state_action_processor.r_limit[1]]], device=device)
 
-    return u_est, fuser_output
+        fuser_input = (state_est.float(), state_now.float(), path_state_estimate)
+        fuser_output = fuser_model(*fuser_input)
+
+        intermediate_variables = {"error_encoder_input": error_encoder_input.clone(), "state_est": state_est.clone(),
+                                  "state_now": state_now.clone()}
+
+        return fuser_output, intermediate_variables
+    else:
+
+        error_encoder_input = data_arr["error_encoder_input"]
+        state_est = data_arr["state_est"]
+        state_now = data_arr["state_now"]
+
+        # (batch size, 1), (batch size, path state dim)
+        u_est, path_state_estimate = error_encoder_model(error_encoder_input.float())
+        fuser_input = (state_est.float(), state_now.float(), path_state_estimate)
+        fuser_output = fuser_model(*fuser_input)
+
+        return fuser_output
 
 
 if __name__ == '__main__':

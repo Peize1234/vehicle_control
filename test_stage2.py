@@ -67,7 +67,7 @@ def test():
     #####################################################
 
     # env = gym.make(env_name)
-    num_vehicles = 1
+    num_vehicles = 5
     trace_path = "trace/sweep.npy"
     stage = 2
     env = SimEnv(trace_path, num_vehicles=num_vehicles, stage=stage)
@@ -133,7 +133,8 @@ def test():
     run_num_pretrained = 0      #### set this to load a particular checkpoint num
 
     directory = "PPO_preTrained" + '/' + env_name + '/'
-    checkpoint_path = directory + "PPO_{}_{}_{}.pth".format(env_name, random_seed, run_num_pretrained)
+    # checkpoint_path = directory + "PPO_{}_{}_{}.pth".format(env_name, random_seed, run_num_pretrained)
+    checkpoint_path = r"C:\d\PythonCode\vehicle_control\PPO_preTrained\AutoDrive-v2.6-调参\PPO_AutoDrive-v2_best_-1362.85062.6-调参_0_0"
     print("loading network from : " + checkpoint_path)
 
     ppo_agent.load(checkpoint_path)
@@ -149,7 +150,9 @@ def test():
         ep_reward = 0
         state_action_seq = MultiListContainer(["state", "action"], env.num_vehicles)
 
-        state = env.reset(np.zeros(env.num_vehicles, dtype=int))
+        # state = env.reset(np.zeros(env.num_vehicles, dtype=int))
+        state = env.reset(np.arange(0, env.target_points.shape[0], env.target_points.shape[0] // env.num_vehicles)[:-1])
+
         u_rand = np.random.uniform(0.7, 0.8, size=max_ep_len)
         delta_est = classical_controller.init_adaptive_param()
 

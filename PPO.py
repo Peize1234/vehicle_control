@@ -7,14 +7,14 @@ import itertools
 import pickle
 from pathlib import Path
 import os
-
+from tqdm import tqdm
 
 ################################## set device ##################################
 print("============================================================================================")
 # set device to cpu or cuda
 device = torch.device('cpu')
-if(torch.cuda.is_available()): 
-    device = torch.device('cuda:0') 
+if (torch.cuda.is_available()):
+    device = torch.device('cuda:0')
     torch.cuda.empty_cache()
     print("Device set to : " + str(torch.cuda.get_device_name(device)))
 else:
@@ -24,13 +24,13 @@ print("=========================================================================
 
 ################################## PPO Policy ##################################
 class RolloutBuffer:
-    def __init__(self, num_vehicles=1, buffer_path: Path = Path(r"./buffer"), buffer_length: int = 8000):
+    def __init__(self, num_vehicles=1, buffer_path: Path = Path(r"./buffer"), buffer_length: int = 20):
         self.num_vehicles = num_vehicles
         self.buffer_path = buffer_path
         self.buffer_name = "buffer"
         self.buffer_length = buffer_length
 
-        self.init_buffer()
+        self.clear()
 
     def init_buffer(self):
         self.actions = [[] for _ in range(self.num_vehicles)]
@@ -41,11 +41,22 @@ class RolloutBuffer:
         self.is_terminals = [[] for _ in range(self.num_vehicles)]
         self.u = [[] for _ in range(self.num_vehicles)]
 
+        # intermediate_variables
+        self.error_encoder_input = [[] for _ in range(self.num_vehicles)]
+        self.state_est = [[] for _ in range(self.num_vehicles)]
+        self.state_now = [[] for _ in range(self.num_vehicles)]
+
+        self.build_batch_processor()
+
+    def build_batch_processor(self):
         self.total_lists = [self.actions, self.states, self.logprobs, self.rewards,
-                            self.state_values, self.is_terminals, self.u]
+                            self.state_values, self.is_terminals, self.u, self.error_encoder_input,
+                            self.state_est, self.state_now]
         self.name2list = {"actions": self.actions, "states": self.states, "logprobs": self.logprobs,
-                          "rewards": self.rewards,
-                          "state_values": self.state_values, "is_terminals": self.is_terminals, "u": self.u}
+                          "rewards": self.rewards, "state_values": self.state_values,
+                          "is_terminals": self.is_terminals, "u": self.u,
+                          "error_encoder_input": self.error_encoder_input, "state_est": self.state_est,
+                          "state_now": self.state_now}
 
     def clear(self):
         self.init_buffer()
@@ -65,12 +76,16 @@ class RolloutBuffer:
         self.state_values = list(itertools.chain.from_iterable(self.state_values))
         self.is_terminals = list(itertools.chain.from_iterable(self.is_terminals))
         self.u = list(itertools.chain.from_iterable(self.u))
+        self.error_encoder_input = list(itertools.chain.from_iterable(self.error_encoder_input))
+        self.state_est = list(itertools.chain.from_iterable(self.state_est))
+        self.state_now = list(itertools.chain.from_iterable(self.state_now))
 
     def save_buffer(self):
         buffer_num = len(os.listdir(self.buffer_path))
         pickle.dump(self.total_lists, open(self.buffer_path / f"{self.buffer_name}{buffer_num}.pkl", "wb"))
 
     def load_buffer(self):
+        print("loading buffer...")
         temp_actions = [[] for _ in range(self.num_vehicles)]
         temp_states = [[] for _ in range(self.num_vehicles)]
         temp_logprobs = [[] for _ in range(self.num_vehicles)]
@@ -78,6 +93,9 @@ class RolloutBuffer:
         temp_state_values = [[] for _ in range(self.num_vehicles)]
         temp_is_terminals = [[] for _ in range(self.num_vehicles)]
         temp_u = [[] for _ in range(self.num_vehicles)]
+        temp_error_encoder_input = [[] for _ in range(self.num_vehicles)]
+        temp_state_est = [[] for _ in range(self.num_vehicles)]
+        temp_state_now = [[] for _ in range(self.num_vehicles)]
 
         for idx in range(len(os.listdir(self.buffer_path))):
             buffer_file = self.buffer_path / f"{self.buffer_name}{idx}.pkl"
@@ -90,6 +108,9 @@ class RolloutBuffer:
                 temp_state_values[i].extend(temp_lists[4][i])
                 temp_is_terminals[i].extend(temp_lists[5][i])
                 temp_u[i].extend(temp_lists[6][i])
+                temp_error_encoder_input[i].extend(temp_lists[7][i])
+                temp_state_est[i].extend(temp_lists[8][i])
+                temp_state_now[i].extend(temp_lists[9][i])
 
         for i in range(self.num_vehicles):
             temp_actions[i].extend(self.actions[i])
@@ -99,6 +120,9 @@ class RolloutBuffer:
             temp_state_values[i].extend(self.state_values[i])
             temp_is_terminals[i].extend(self.is_terminals[i])
             temp_u[i].extend(self.u[i])
+            temp_error_encoder_input[i].extend(self.error_encoder_input[i])
+            temp_state_est[i].extend(self.state_est[i])
+            temp_state_now[i].extend(self.state_now[i])
 
         self.actions = temp_actions
         self.states = temp_states
@@ -107,11 +131,13 @@ class RolloutBuffer:
         self.state_values = temp_state_values
         self.is_terminals = temp_is_terminals
         self.u = temp_u
+        self.error_encoder_input = temp_error_encoder_input
+        self.state_est = temp_state_est
+        self.state_now = temp_state_now
 
-        self.total_lists = [self.actions, self.states, self.logprobs, self.rewards,
-                            self.state_values, self.is_terminals, self.u]
-        self.name2list = {"actions": self.actions, "states": self.states, "logprobs": self.logprobs, "rewards": self.rewards,
-                          "state_values": self.state_values, "is_terminals": self.is_terminals, "u": self.u}
+        self.build_batch_processor()
+
+        print("buffer loaded!")
 
     def check_buffer_size(self) -> bool:
         total_size = 0
@@ -130,7 +156,7 @@ class RolloutBuffer:
         :param done_idx: boolean array indicating which vehicles have terminated
         """
         assert len(keys) == len(selected_values), "Number of keys and values should be equal"
-        assert np.sum(done_idx) == len(keys), "Number of True indices and keys should be equal"
+        assert np.sum(~done_idx) == len(selected_values[0]), "Number of False indices and keys should be equal"
         assert len(done_idx) == self.num_vehicles, "Number of done indices should be equal to number of vehicles"
 
         j = 0
@@ -153,38 +179,38 @@ class ActorCritic(nn.Module):
         super(ActorCritic, self).__init__()
 
         self.has_continuous_action_space = has_continuous_action_space
-        
+
         if has_continuous_action_space:
             self.action_dim = action_dim
             self.action_var = torch.full((action_dim,), action_std_init * action_std_init).to(device)
         # actor
         if has_continuous_action_space:
             self.actor = nn.Sequential(
-                            nn.Linear(state_dim, 64),
-                            nn.Tanh(),
-                            nn.Linear(64, 64),
-                            nn.Tanh(),
-                            nn.Linear(64, action_dim),
-                            nn.Tanh()
-                        )
+                nn.Linear(state_dim, 64),
+                nn.ReLU(),
+                nn.Linear(64, 64),
+                nn.ReLU(),
+                nn.Linear(64, action_dim),
+                nn.Tanh()
+            )
         else:
             self.actor = nn.Sequential(
-                            nn.Linear(state_dim, 64),
-                            nn.Tanh(),
-                            nn.Linear(64, 64),
-                            nn.Tanh(),
-                            nn.Linear(64, action_dim),
-                            nn.Softmax(dim=-1)
-                        )
+                nn.Linear(state_dim, 64),
+                nn.Tanh(),
+                nn.Linear(64, 64),
+                nn.Tanh(),
+                nn.Linear(64, action_dim),
+                nn.Softmax(dim=-1)
+            )
         # critic
         self.critic = nn.Sequential(
-                        nn.Linear(state_dim, 64),
-                        nn.Tanh(),
-                        nn.Linear(64, 64),
-                        nn.Tanh(),
-                        nn.Linear(64, 1)
-                    )
-        
+            nn.Linear(state_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1)
+        )
+
     def set_action_std(self, new_action_std):
         if self.has_continuous_action_space:
             self.action_var = torch.full((self.action_dim,), new_action_std * new_action_std).to(device)
@@ -195,7 +221,7 @@ class ActorCritic(nn.Module):
 
     def forward(self):
         raise NotImplementedError
-    
+
     def act(self, state):
         if isinstance(state, np.ndarray):
             state = torch.FloatTensor(state).to(device)
@@ -215,16 +241,16 @@ class ActorCritic(nn.Module):
         state_val = self.critic(state)
 
         return action.detach(), action_logprob.detach(), state_val.detach()
-    
+
     def evaluate(self, state, action):
 
         if self.has_continuous_action_space:
             action_mean = self.actor(state)
-            
+
             action_var = self.action_var.expand_as(action_mean)
             cov_mat = torch.diag_embed(action_var).to(device)
             dist = MultivariateNormal(action_mean, cov_mat)
-            
+
             # For Single Action Environments.
             if self.action_dim == 1:
                 action = action.reshape(-1, self.action_dim)
@@ -234,12 +260,13 @@ class ActorCritic(nn.Module):
         action_logprobs = dist.log_prob(action)
         dist_entropy = dist.entropy()
         state_values = self.critic(state)
-        
+
         return action_logprobs, state_values, dist_entropy
 
 
 class PPO:
-    def __init__(self, state_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip, has_continuous_action_space, action_std_init=0.6, num_vehicles=1):
+    def __init__(self, state_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip,
+                 has_continuous_action_space, action_std_init=0.6, num_vehicles=1, buffer_size=20):
 
         self.has_continuous_action_space = has_continuous_action_space
 
@@ -249,18 +276,18 @@ class PPO:
         self.gamma = gamma
         self.eps_clip = eps_clip
         self.K_epochs = K_epochs
-        
-        self.buffer = RolloutBuffer(num_vehicles)
+
+        self.buffer = RolloutBuffer(num_vehicles, buffer_length=buffer_size)
 
         self.policy = ActorCritic(state_dim, action_dim, has_continuous_action_space, action_std_init).to(device)
         self.optimizer = torch.optim.Adam([
-                        {'params': self.policy.actor.parameters(), 'lr': lr_actor},
-                        {'params': self.policy.critic.parameters(), 'lr': lr_critic}
-                    ])
+            {'params': self.policy.actor.parameters(), 'lr': lr_actor},
+            {'params': self.policy.critic.parameters(), 'lr': lr_critic}
+        ])
 
         self.policy_old = ActorCritic(state_dim, action_dim, has_continuous_action_space, action_std_init).to(device)
         self.policy_old.load_state_dict(self.policy.state_dict())
-        
+
         self.MseLoss = nn.MSELoss()
 
     def set_action_std(self, new_action_std):
@@ -332,6 +359,8 @@ class PPO:
     def update(self):
 
         self.buffer.format()
+
+        print("rewards calculating ...")
         # Monte Carlo estimate of returns
         rewards = []
         discounted_reward = 0
@@ -340,7 +369,7 @@ class PPO:
                 discounted_reward = 0
             discounted_reward = reward + (self.gamma * discounted_reward)
             rewards.insert(0, discounted_reward)
-            
+
         # Normalizing the rewards
         rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
         rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
@@ -352,52 +381,53 @@ class PPO:
         old_state_values = torch.squeeze(torch.stack(self.buffer.state_values, dim=0)).detach().to(device)
         old_u = torch.stack(self.buffer.u, dim=0).detach().to(device)  # (batch_size, 1)
 
+        if hasattr(self.policy, "fuser"):
+            old_error_encoder_input = torch.stack(self.buffer.error_encoder_input, dim=0).detach().to(device)
+            old_state_est = torch.stack(self.buffer.state_est, dim=0).detach().to(device)
+            old_state_now = torch.stack(self.buffer.state_now, dim=0).detach().to(device)
+
+            old_states = {"error_encoder_input": old_error_encoder_input, "state_est": old_state_est,
+                          "state_now": old_state_now}
+
         # calculate advantages
         advantages = rewards.detach() - old_state_values.detach()
 
+        print("start training ...")
         # Optimize policy for K epochs
-        for _ in range(self.K_epochs):
-
+        for _ in tqdm(range(self.K_epochs)):
             # Evaluating old actions and values
-            if hasattr(self.policy, "fuser"):
-                logprobs, state_values, dist_entropy, error_encoder_output = self.policy.evaluate(old_states.cpu().numpy(), old_actions)
-            else:
-                logprobs, state_values, dist_entropy = self.policy.evaluate(old_states, old_actions)
+            logprobs, state_values, dist_entropy = self.policy.evaluate(old_states, old_actions)
 
             # match state_values tensor dimensions with rewards tensor
             state_values = torch.squeeze(state_values)
-            
+
             # Finding the ratio (pi_theta / pi_theta__old)
             ratios = torch.exp(logprobs - old_logprobs.detach())
 
             # Finding Surrogate Loss  
             surr1 = ratios * advantages
-            surr2 = torch.clamp(ratios, 1-self.eps_clip, 1+self.eps_clip) * advantages
+            surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
 
             # final loss of clipped objective PPO
             loss = -torch.min(surr1, surr2) + 0.5 * self.MseLoss(state_values, rewards) - 0.01 * dist_entropy
+            # print(loss.mean().item())
             # if hasattr(self.policy, "fuser"):
             #     loss += 1.0 * self.MseLoss(error_encoder_output, old_u.float())
-            
+
             # take gradient step
             self.optimizer.zero_grad()
             loss.mean().backward()
             self.optimizer.step()
-            
+
         # Copy new weights into old policy
         self.policy_old.load_state_dict(self.policy.state_dict())
 
         # clear buffer
         self.buffer.clear()
-    
+
     def save(self, checkpoint_path):
         torch.save(self.policy_old.state_dict(), checkpoint_path)
-   
+
     def load(self, checkpoint_path):
         self.policy_old.load_state_dict(torch.load(checkpoint_path, map_location=lambda storage, loc: storage))
         self.policy.load_state_dict(torch.load(checkpoint_path, map_location=lambda storage, loc: storage))
-        
-        
-       
-
-

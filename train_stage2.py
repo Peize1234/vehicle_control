@@ -21,6 +21,8 @@ from utils import state_diff, MultiListContainer
 from Trace import Trace
 from LinearTrackingAdaptiveController import LinearTrackingAdaptiveController
 from copy import deepcopy
+import time
+from pathlib import Path
 
 
 u_ref = 0.7
@@ -50,9 +52,9 @@ def train():
     ## Note : print/log frequencies should be > than max_ep_len
 
     ################ PPO hyperparameters ################
-    update_timestep = max_ep_len * 4  # update policy every n timesteps
+    update_timestep = max_ep_len * 2  # update policy every n timesteps
     # log_freq = max(update_timestep, log_freq)  # make sure log_freq >= update_timestep
-    K_epochs = 120  # update policy for K epochs in one PPO update
+    K_epochs = 80  # update policy for K epochs in one PPO update
 
     eps_clip = 0.2  # clip parameter for PPO
     gamma = 0.99  # discount factor
@@ -60,8 +62,11 @@ def train():
     lr_actor = 0.0003  # learning rate for actor network
     lr_critic = 0.001  # learning rate for critic network
 
+    buffer_size = 10000
+
     random_seed = 0  # set random seed if required (0 = no random seed)
     #####################################################
+    # 网络调小，update_timestep max_ep_len -> max_ep_len * 2
 
     print("training environment name : " + env_name)
 
@@ -117,6 +122,7 @@ def train():
     ppo_checkpoint_path = directory + "PPO_{}_{}_{}.pth".format(env_name, random_seed, run_num_pretrained)
     error_encoder_checkpoint_name = "encoder_state_dict_width1.pth"
     print("save checkpoint path : " + ppo_checkpoint_path)
+    ppo_checkpoint_path = Path(ppo_checkpoint_path)
     #####################################################
 
     ############# print all hyperparameters #############
@@ -185,8 +191,8 @@ def train():
     # fuser model parameters
     fuser_state_input_dim = state_space_dim - 2 + (env.dest_points_num + 1) * env.env_dim
     fuser_output_dim = 10
-    fuser_hidden_dim = 128
-    fuser_num_head = 8
+    fuser_hidden_dim = 64
+    fuser_num_head = 4
     fuser_dropout = 0.1
 
     fuser = Fuser(fuser_state_input_dim, fuser_output_dim,
@@ -203,7 +209,9 @@ def train():
                         error_encoder,
                         fuser,
                         action_std,
-                        env.num_vehicles)
+                        env.num_vehicles,
+                        buffer_size)
+    ppo_agent.eval()
     # ppo_agent = PPO(policy_input_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip,
     #                 has_continuous_action_space, action_std, num_vehicles)
 
@@ -240,11 +248,13 @@ def train():
     assert state_action_seq_max_len >= error_encoder_seq_len + 1, \
         "state_action_seq_max_len should be greater than or equal to error_encoder_seq_len + 1"
 
+    now_reward = -5000
+
     # training loop
     while time_step <= max_training_timesteps:
 
-        state = env.reset(np.zeros(env.num_vehicles, dtype=int))
-        # state = env.reset(np.arange(0, env.target_points.shape[0], env.target_points.shape[0] // env.num_vehicles)[:-1])
+        # state = env.reset(np.zeros(env.num_vehicles, dtype=int))
+        state = env.reset(np.arange(0, env.target_points.shape[0], env.target_points.shape[0] // env.num_vehicles)[:-1])
 
         current_ep_reward = np.zeros(env.num_vehicles)
         state_action_seq = MultiListContainer(["state", "action"], env.num_vehicles, max_len=error_encoder_seq_len + 1)
@@ -252,6 +262,7 @@ def train():
         u_rand = np.random.uniform(0.7, 0.8, size=max_ep_len)
         delta_est = classical_controller.init_adaptive_param()
         for t in range(1, max_ep_len + 1):
+            t1 = time.time()
 
             # abs_action = classical_controller.get_action(state[:, :state_space_aug_dim],
             #                                              method=base_control_method, zero_Fxf=True).copy()
@@ -259,7 +270,7 @@ def train():
                                                                                      done=env.done,
                                                                                      adaptive_delta=delta_est,
                                                                                      zero_Fxf=True,
-                                                                                     with_adaptive=False,
+                                                                                     with_adaptive=True,
                                                                                      action_normalize=True)
 
             state_action_seq.append("state", state, env.done)
@@ -282,7 +293,8 @@ def train():
 
             # saving reward and is_terminals
             ppo_agent.buffer.append(["rewards", "is_terminals", "u"],
-                                    [reward_add_to_buffer, done_add_to_buffer, torch.tensor([u_rand[t - 1]])],
+                                    [reward_add_to_buffer, done_add_to_buffer,
+                                     torch.tensor([u_rand[t - 1] for _ in range(np.sum(~output_done))])],
                                     output_done)
 
             time_step += 1
@@ -293,7 +305,7 @@ def train():
 
             # update PPO agent
             if time_step % update_timestep == 0:
-                # print("updating ppo agent...")
+                print("updating ppo agent...")
                 ppo_agent.update()
                 zero_start_data_num = 0
                 middle_start_data_num = 0
@@ -307,7 +319,19 @@ def train():
                 log_avg_reward = log_running_reward / log_running_episodes
                 log_avg_reward = np.round(log_avg_reward, 4)
 
-                log_f.write('{},{},{}\n'.format(i_episode, time_step, log_avg_reward))
+                if np.mean(log_avg_reward) > now_reward:
+                    now_reward = np.mean(log_avg_reward)
+                    save_file_name_split = [ppo_checkpoint_path.name[:-4], ppo_checkpoint_path.suffix]
+                    best_save_path = ppo_checkpoint_path.parent / (save_file_name_split[0] + f"_best" +
+                                                                   save_file_name_split[1])
+                    ppo_agent.save(best_save_path)
+                    # error_encoder.save_all_state_dict(file_name=f"error_encoder_all_state_dict_best.pth")
+                    print("saving best model at :", best_save_path)
+
+                    log_f.write('{},{},{} <- saved best model\n'.format(i_episode, time_step, log_avg_reward))
+                else:
+                    log_f.write('{},{},{}\n'.format(i_episode, time_step, log_avg_reward))
+
                 log_f.flush()
 
                 log_running_reward = 0
@@ -328,7 +352,7 @@ def train():
             # save model weights
             if time_step % save_model_freq == 0:
                 print("--------------------------------------------------------------------------------------------")
-                print("saving model at : " + ppo_checkpoint_path)
+                print("saving model at :", ppo_checkpoint_path)
                 ppo_agent.save(ppo_checkpoint_path)
                 error_encoder.save_all_state_dict()
                 print("model saved")
@@ -338,6 +362,8 @@ def train():
             # break; if the episode is over
             if np.all(env.done):
                 break
+            t2 = time.time()
+            print("\rtime_step", time_step, " -> time: ", t2 - t1, end="", flush=True)
         # print("----------"*10)
         print_running_reward += current_ep_reward
         print_running_episodes += 1
